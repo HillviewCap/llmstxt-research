@@ -1,0 +1,147 @@
+{
+  "default": {
+    "database": {
+      "path": "researchdb/llms_metadata.db"
+    },
+    "pipeline_workers": 4,
+    "monitoring": {
+      "enabled": true,
+      "health_check_interval": 60,
+      "metrics_collection_interval": 300,
+      "alert_check_interval": 600,
+      "retention_days": 30
+    },
+    "sandbox": {
+      "mode": "mock",
+      "timeout": 30,
+      "max_tokens": 1000
+    }
+  },
+  "dev": {
+    "database": {
+      "path": "researchdb/llms_metadata.db"
+    },
+    "pipeline_workers": 2,
+    "monitoring": {
+      "enabled": true,
+      "health_check_interval": 60,
+      "metrics_collection_interval": 300,
+      "alert_check_interval": 600,
+      "retention_days": 7
+    },
+    "sandbox": {
+      "mode": "mock",
+      "timeout": 30,
+      "max_tokens": 1000
+    },
+    "logging": {
+      "level": "DEBUG",
+      "file": "logs/dev.log"
+    }
+  },
+  "test": {
+    "database": {
+      "path": "researchdb/llms_metadata_test.db"
+    },
+    "pipeline_workers": 4,
+    "monitoring": {
+      "enabled": true,
+      "health_check_interval": 60,
+      "metrics_collection_interval": 300,
+      "alert_check_interval": 600,
+      "retention_days": 7
+    },
+    "sandbox": {
+      "mode": "mock",
+      "timeout": 30,
+      "max_tokens": 1000
+    },
+    "logging": {
+      "level": "INFO",
+      "file": "logs/test.log"
+    }
+  },
+  "prod": {
+    "database": {
+      "path": "researchdb/llms_metadata.db"
+    },
+    "pipeline_workers": 8,
+    "monitoring": {
+      "enabled": true,
+      "health_check_interval": 60,
+      "metrics_collection_interval": 300,
+      "alert_check_interval": 600,
+      "retention_days": 90,
+      "notification_channels": [
+        {
+          "type": "email",
+          "config": {
+            "smtp_server": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_username": "alerts@example.com",
+            "smtp_password": "REPLACE_WITH_ACTUAL_PASSWORD",
+            "sender": "alerts@example.com",
+            "recipients": ["admin@example.com"]
+          }
+        },
+        {
+          "type": "log",
+          "config": {
+            "level": "WARNING"
+          }
+        }
+      ],
+      "alert_rules": [
+        {
+          "id": "high-cpu-usage",
+          "name": "High CPU Usage",
+          "type": "metric",
+          "severity": "warning",
+          "conditions": [
+            {
+              "metric_type": "performance",
+              "metric_name": "cpu_percent",
+              "operator": ">",
+              "threshold": 90
+            }
+          ]
+        },
+        {
+          "id": "high-memory-usage",
+          "name": "High Memory Usage",
+          "type": "metric",
+          "severity": "warning",
+          "conditions": [
+            {
+              "metric_type": "performance",
+              "metric_name": "memory_percent",
+              "operator": ">",
+              "threshold": 90
+            }
+          ]
+        },
+        {
+          "id": "unhealthy-system",
+          "name": "Unhealthy System",
+          "type": "health",
+          "severity": "critical",
+          "conditions": [
+            {
+              "component": "overall",
+              "status": "unhealthy"
+            }
+          ]
+        }
+      ]
+    },
+    "sandbox": {
+      "mode": "mock",
+      "timeout": 30,
+      "max_tokens": 1000
+    },
+    "logging": {
+      "level": "WARNING",
+      "file": "logs/prod.log"
+    }
+  }
+}

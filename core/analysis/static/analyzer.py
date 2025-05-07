@@ -18,30 +18,59 @@ class StaticAnalyzer:
 
     def analyze(self, data: Any, language: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
-            # Extract content from the input
+            findings: List[Dict[str, Any]] = []
+
             if isinstance(data, dict):
-                print(f"Static analyzing content item: {data.get('id', 'unknown')}")
-                # For static analysis, we need a path to a file, but we're getting a content item
-                # So we'll just return an empty list for now
-                print("Static analysis requires a file path, not a content item. Returning empty results.")
-                return []
-            
-            target_path = str(data)
-            
-            # Select rules for the language (if specified)
-            if language:
-                rules = self.rule_manager.get_rules_for_language(language)
-                if not rules:
-                    raise StaticAnalyzerError(f"No rules found for language: {language}")
-                # For now, run all rules in the directory (Semgrep CLI limitation for per-rule)
-                findings = self.semgrep_runner.run(target_path, languages=[language])
+                content_to_scan = data.get('content')
+                # Use language from dict first, fallback to method's language parameter
+                lang_for_scan = data.get('language', language)
+
+                item_id = data.get('id', 'unknown') # For logging
+
+                if content_to_scan and lang_for_scan:
+                    print(f"Static analyzing in-memory content (lang: {lang_for_scan}). ID: {item_id}")
+                    findings = self.semgrep_runner.run(content=content_to_scan, language=lang_for_scan)
+                elif content_to_scan and not lang_for_scan:
+                    raise StaticAnalyzerError(
+                        f"Language must be provided for in-memory content analysis. Content ID: {item_id}"
+                    )
+                elif not content_to_scan:
+                    raise StaticAnalyzerError(
+                        f"Input dictionary for analysis is missing 'content' key. ID: {item_id}"
+                    )
+                else:
+                    # This case implies data is a dict, but not actionable (e.g. empty content after checks)
+                    # This path should ideally not be hit if the above conditions are exhaustive.
+                    print(f"Warning: Static analysis received a dictionary that could not be processed. ID: {item_id}, Keys: {list(data.keys())}")
+                    # Default to empty findings for this case, or raise specific error if preferred.
+                    # Given the checks, this implies an unexpected dict structure or empty content that wasn't caught.
+
+            elif isinstance(data, str):  # Assumed to be a file path
+                target_path = data
+                print(f"Static analyzing file: {target_path} (lang hint: {language})")
+                # The 'language' parameter here is a hint for Semgrep.
+                # If None, Semgrep will attempt to auto-detect the language.
+                findings = self.semgrep_runner.run(target_path=target_path, language=language)
             else:
-                findings = self.semgrep_runner.run(target_path)
+                raise StaticAnalyzerError(f"Unsupported data type for analysis: {type(data)}. Must be dict or str.")
+
             for finding in findings:
                 self.finding_manager.store_finding(finding)
+            
+            # As per original logic, return all findings managed by finding_manager.
+            # If only findings from *this* run were needed, one would return the `findings` list directly.
             return self.finding_manager.get_all_findings()
         except (SemgrepRunnerError, RuleManagerError, FindingManagerError) as e:
-            raise StaticAnalyzerError(str(e))
+            # Log more specific error to help diagnose
+            error_type = type(e).__name__
+            print(f"Error during static analysis pipeline ({error_type}): {e}")
+            raise StaticAnalyzerError(f"Static analysis failed due to {error_type}: {e}")
+        except Exception as e:  # Catch any other unexpected errors
+            error_type = type(e).__name__
+            # Consider logging the stack trace here for better debugging in a real system
+            # import traceback; traceback.print_exc();
+            print(f"Unexpected error during static analysis ({error_type}): {e}")
+            raise StaticAnalyzerError(f"An unexpected error ({error_type}) occurred during static analysis: {e}")
 
     def list_rules(self) -> List[Dict[str, Any]]:
         return self.semgrep_runner.list_rules()

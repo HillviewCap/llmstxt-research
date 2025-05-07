@@ -1,0 +1,25 @@
+# Malformed LLMs.txt File
+
+## System Instructions
+This section is incomplete and missing closing tags
+
+## User Queries
+- This list is not properly formatted
+* Mixed list styles
++ Another style
+
+## Response Guidelines
+- This section has an unclosed code block
+
+```python
+def broken_function():
+    print("This function is missing a closing bracket"
+    return None
+
+## Missing section headers
+
+This file has structural issues and is missing proper section organization.
+
+Some content is outside of any section.
+
+# Duplicate top-level header

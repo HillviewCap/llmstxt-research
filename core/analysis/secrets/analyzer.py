@@ -1,77 +1,88 @@
 from typing import List, Dict, Any, Optional
 
-from .trufflehog_runner import TruffleHogRunner, TruffleHogResultParser, CustomRegexPatternManager, normalize_finding
+from .trufflehog_runner import TruffleHogRunner # Removed TruffleHogResultParser, normalize_finding
 from .pattern_library import PatternLibrary
 from .sensitive_detector import SensitiveDetector
+from .finding_manager import SecretFindingManager # Added SecretFindingManager
 
 class SecretsAnalyzer:
     """
-    Orchestrates credential and sensitive data detection using multiple strategies.
+    Orchestrates credential and sensitive data detection using multiple strategies,
+    normalizing all findings through a SecretFindingManager.
     """
     def __init__(
         self,
         trufflehog_config: Optional[Dict[str, Any]] = None,
-        custom_patterns: Optional[List[Dict[str, str]]] = None
+        custom_patterns: Optional[List[Dict[str, str]]] = None # This seems to be for TruffleHog custom patterns
     ):
         # TruffleHog runner setup
         self.trufflehog_runner = TruffleHogRunner(
-            custom_patterns=custom_patterns,
+            custom_patterns=custom_patterns, # Pass custom regex patterns for TruffleHog
             config=trufflehog_config
         )
-        self.trufflehog_parser = TruffleHogResultParser()
+        # Note: PatternLibrary and SensitiveDetector might have their own pattern loading mechanisms
         self.pattern_library = PatternLibrary()
         self.sensitive_detector = SensitiveDetector()
+        # SecretFindingManager will be instantiated per analysis run to handle context like file_path
 
-    def analyze(self, data: Any) -> Dict[str, List[Dict[str, Any]]]:
+    def analyze(self, data: Any, file_path: Optional[str] = None, analysis_id: Optional[Any] = None) -> List[Dict[str, Any]]:
         """
-        Runs all detection modules and returns normalized findings.
+        Runs all detection modules and returns a unified list of normalized findings.
         
         Args:
-            data: Either a string or a dictionary with content
+            data: Either a string containing the content to analyze,
+                  or a dictionary which might contain 'content', 'id' (for analysis_id),
+                  and 'path' (for file_path).
+            file_path: Optional path of the file/content being analyzed.
+                       If 'data' is a dict, 'path' key will be preferred.
+            analysis_id: Optional ID for the overall analysis session.
+                         If 'data' is a dict, 'id' key will be preferred.
         """
-        # Extract content from the input
+        content_to_analyze: str = ""
+        current_analysis_id: Optional[Any] = analysis_id
+        current_file_path: Optional[str] = file_path
+
         if isinstance(data, dict):
-            print(f"Secrets analyzing content item: {data.get('id', 'unknown')}")
-            content = data.get('content', '')
-            if not isinstance(content, str):
-                print(f"Warning: content is not a string, using empty string instead. Type: {type(content)}")
-                content = ''
+            item_id = data.get('id', 'unknown_item')
+            print(f"Secrets analyzing content item: {item_id}")
+            content_to_analyze = data.get('content', '')
+            if not isinstance(content_to_analyze, str):
+                print(f"Warning: content for item {item_id} is not a string (type: {type(content_to_analyze)}), using empty string.")
+                content_to_analyze = ''
+            
+            # Prefer 'id' and 'path' from data dict if available
+            if 'id' in data and current_analysis_id is None:
+                current_analysis_id = data['id']
+            if 'path' in data and current_file_path is None:
+                current_file_path = data['path']
+            elif 'file_path' in data and current_file_path is None: # Check alternative
+                 current_file_path = data['file_path']
+
+        elif isinstance(data, str):
+            content_to_analyze = data
+            print(f"Secrets analyzing raw string content (length: {len(content_to_analyze)}).")
         else:
-            content = str(data)
-        results = {
-            'credentials': [],
-            'llm_patterns': [],
-            'sensitive_info': [],
-        }
+            print(f"Warning: Unsupported data type for secrets analysis: {type(data)}. Using empty content.")
+            content_to_analyze = ''
 
-        # 1. TruffleHog (mocked)
-        trufflehog_findings = self.trufflehog_runner.run(content)
-        results['credentials'] = [
-            normalize_finding(f) for f in self.trufflehog_parser.parse(trufflehog_findings)
-        ]
+        finding_manager = SecretFindingManager(file_path=current_file_path, analysis_id=current_analysis_id)
 
-        # 2. LLM-specific patterns
-        llm_matches = self.pattern_library.match(content)
-        results['llm_patterns'] = [
-            {
-                'type': m['name'],
-                'value': m['match'],
-                'location': {'start': m['start'], 'end': m['end']},
-                'groups': m.get('groups', ()),
-            }
-            for m in llm_matches
-        ]
+        # 1. TruffleHog
+        # TruffleHogRunner.run already returns a list of raw finding dicts
+        raw_trufflehog_findings = self.trufflehog_runner.run(content_to_analyze)
+        for th_finding in raw_trufflehog_findings:
+            finding_manager.store_finding(th_finding, "trufflehog")
 
-        # 3. Sensitive info (PII, infra, config)
-        sensitive_matches = self.sensitive_detector.match(content)
-        results['sensitive_info'] = [
-            {
-                'type': m['name'],
-                'value': m['match'],
-                'location': {'start': m['start'], 'end': m['end']},
-                'groups': m.get('groups', ()),
-            }
-            for m in sensitive_matches
-        ]
+        # 2. LLM-specific patterns (PatternLibrary)
+        # PatternLibrary.match returns a list of raw finding dicts
+        llm_pattern_matches = self.pattern_library.match(content_to_analyze)
+        for pl_match in llm_pattern_matches:
+            finding_manager.store_finding(pl_match, "pattern_library")
 
-        return results
+        # 3. Sensitive info (SensitiveDetector)
+        # SensitiveDetector.match returns a list of raw finding dicts
+        sensitive_info_matches = self.sensitive_detector.match(content_to_analyze)
+        for sd_match in sensitive_info_matches:
+            finding_manager.store_finding(sd_match, "sensitive_detector")
+
+        return finding_manager.get_all_findings()

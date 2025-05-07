@@ -42,44 +42,20 @@ class TruffleHogRunner:
         # Simple entropy mock
         return min(8.0, len(set(s)) / len(s) * 8) if s else 0.0
 
-class TruffleHogResultParser:
-    """
-    Parses TruffleHog findings and normalizes them for the platform.
-    """
-    @staticmethod
-    def parse(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        normalized = []
-        for f in findings:
-            normalized.append({
-                'credential_type': f['type'],
-                'value': f['match'],
-                'location': {'start': f['start'], 'end': f['end']},
-                'entropy': f.get('entropy', None),
-                'raw': f.get('raw', None),
-            })
-        return normalized
+# TruffleHogResultParser and normalize_finding removed as their functionality
+# is now handled by SecretFindingManager in finding_manager.py
 
 class CustomRegexPatternManager:
     """
     Manages custom regex patterns for credential detection.
+    (This class might be used by TruffleHogRunner or directly by an orchestrator
+    if custom patterns are loaded from a central place and passed to runners)
     """
     def __init__(self):
-        self.patterns = []
+        self.patterns: List[Dict[str, str]] = [] # Ensure type hint consistency
 
     def add_pattern(self, name: str, regex: str):
         self.patterns.append({'name': name, 'regex': regex})
 
     def get_patterns(self) -> List[Dict[str, str]]:
         return self.patterns
-
-def normalize_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normalize a single finding to the platform's credential finding schema.
-    """
-    return {
-        'type': finding.get('credential_type', finding.get('type', 'Unknown')),
-        'value': finding.get('value', finding.get('match', '')),
-        'location': finding.get('location', {}),
-        'entropy': finding.get('entropy', None),
-        'raw': finding.get('raw', None),
-    }

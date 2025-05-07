@@ -1,6 +1,8 @@
 import subprocess
 import json
 import os
+import tempfile
+import shutil
 from typing import List, Dict, Any, Optional
 
 class SemgrepRunnerError(Exception):
@@ -47,24 +49,90 @@ class SemgrepRunner:
                 continue
         return metadata
 
-    def run(self, target_path: str, languages: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        if not os.path.exists(target_path):
-            raise SemgrepRunnerError(f"Target path does not exist: {target_path}")
-        cmd = [
-            "semgrep",
-            "--json",
-            "--config",
-            self.rules_path,
-            target_path
-        ]
-        if languages:
-            for lang in languages:
-                cmd.extend(["--lang", lang])
+    def run(self,
+            target_path: Optional[str] = None,
+            content: Optional[str] = None,
+            language: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not content and not target_path:
+            raise SemgrepRunnerError("Either target_path or content must be provided.")
+        if content and not language:
+            # If content is provided, language is essential for creating a correctly suffixed temp file
+            # and for semgrep to know how to parse it.
+            raise SemgrepRunnerError("Language must be provided when scanning content.")
+
+        actual_scan_path = None
+        temp_file_path_for_cleanup = None # Store path for cleanup
+
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return self.parse_results(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise SemgrepRunnerError(f"Semgrep failed: {e.stderr}")
+            if content:
+                # Ensure language is valid for a file extension, e.g. "python" -> ".py"
+                # Basic sanitization for file extension.
+                safe_lang_suffix = "".join(c for c in language if c.isalnum()) or "tmp"
+                
+                # Create a temporary file
+                # delete=False is used because we need to close it before semgrep can use it (on some OS),
+                # and then manually delete it.
+                with tempfile.NamedTemporaryFile(
+                    mode='w',
+                    suffix=f".{safe_lang_suffix}", # e.g. .py, .js
+                    delete=False,
+                    encoding='utf-8'
+                ) as temp_file_handle:
+                    temp_file_handle.write(content)
+                    temp_file_handle.flush() # Ensure content is written to disk
+                    actual_scan_path = temp_file_handle.name
+                    temp_file_path_for_cleanup = actual_scan_path
+                # temp_file_handle is now closed here after exiting the 'with' block.
+                # Semgrep can now access the file.
+            else: # target_path must be provided
+                if not target_path or not os.path.exists(target_path): # Check existence if target_path is used
+                    raise SemgrepRunnerError(f"Target path does not exist or not provided: {target_path}")
+                actual_scan_path = target_path
+            
+            # Construct Semgrep command
+            cmd = [
+                "semgrep",
+                "--json", # Output in JSON format
+                "--config", self.rules_path, # Specify rules directory/file
+                actual_scan_path # Target file or temp file
+            ]
+
+            # If language is specified (especially for content scanning, or to override auto-detection)
+            if language:
+                cmd.extend(["--lang", language])
+            
+            # Check if semgrep executable is available
+            if not shutil.which("semgrep"):
+                raise SemgrepRunnerError("Semgrep executable not found. Please ensure it is installed and in PATH.")
+
+            # Execute Semgrep
+            # check=False because Semgrep returns 1 for findings, which would raise CalledProcessError
+            process = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+            # Semgrep exit codes:
+            # 0: No findings
+            # 1: Findings found
+            # >1: Error (e.g., 2 for CLI parsing error, rule error, etc.)
+            if process.returncode > 1:
+                error_output = process.stderr if process.stderr.strip() else process.stdout
+                raise SemgrepRunnerError(
+                    f"Semgrep execution failed with code {process.returncode}: {error_output}"
+                )
+            
+            # Even with return code 0 or 1, stdout might be empty if semgrep had an issue
+            # that didn't result in a >1 exit code (e.g. some misconfigurations).
+            # The parse_results method should handle empty or invalid JSON.
+            return self.parse_results(process.stdout)
+
+        finally:
+            # Cleanup: Remove the temporary file if it was created
+            if temp_file_path_for_cleanup and os.path.exists(temp_file_path_for_cleanup):
+                try:
+                    os.remove(temp_file_path_for_cleanup)
+                except OSError as e:
+                    # Log this error (e.g., using a proper logger if available in the project)
+                    # For now, print a warning. This should not stop the program.
+                    print(f"Warning: Failed to remove temporary file {temp_file_path_for_cleanup}: {e}")
 
     def parse_results(self, output: str) -> List[Dict[str, Any]]:
         try:

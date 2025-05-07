@@ -10,10 +10,15 @@ Responsibilities:
 
 from typing import List, Dict, Any
 from pathlib import Path
+from jinja2 import Environment, FileSystemLoader
 
 class ReportGenerator:
     def __init__(self, template_path: str):
-        self.template_path = template_path
+        self.template_path = Path(template_path)
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(str(self.template_path.parent)),
+            autoescape=True
+        )
 
     def summarize_findings(self, findings: List[Dict[str, Any]]) -> str:
         """Summarize findings for the report."""
@@ -49,29 +54,20 @@ class ReportGenerator:
     def generate_report(self, findings: List[Dict[str, Any]], output_path: str) -> str:
         """Generate a report using the template and findings."""
         summary = self.summarize_findings(findings)
-        evidence = self.collect_evidence(findings)
-        remediations = self.suggest_remediation(findings)
+        evidence_list = self.collect_evidence(findings)
+        remediation_suggestions = self.suggest_remediation(findings)
 
-        # Load template
-        template = Path(self.template_path).read_text(encoding="utf-8")
+        template = self.jinja_env.get_template(self.template_path.name)
 
-        # Simple template rendering (replace placeholders)
-        report = template.replace("{{SUMMARY}}", summary)
-        report = report.replace("{{EVIDENCE}}", self._format_evidence(evidence))
-        report = report.replace("{{REMEDIATIONS}}", self._format_remediations(remediations))
+        report_context = {
+            "summary": summary,
+            "findings": findings, # Pass full findings for more detailed templating
+            "evidence_list": evidence_list,
+            "remediation_suggestions": remediation_suggestions
+        }
+
+        report_content = template.render(report_context)
 
         # Write report to output_path
-        Path(output_path).write_text(report, encoding="utf-8")
+        Path(output_path).write_text(report_content, encoding="utf-8")
         return output_path
-
-    def _format_evidence(self, evidence: List[Dict[str, Any]]) -> str:
-        lines = []
-        for ev in evidence:
-            lines.append(f"ID: {ev['id']}\nSource: {ev['source']}\nEvidence: {ev['evidence']}\nContext: {ev['context']}\n")
-        return "\n".join(lines)
-
-    def _format_remediations(self, remediations: List[Dict[str, str]]) -> str:
-        lines = []
-        for rem in remediations:
-            lines.append(f"ID: {rem['id']}\nRemediation: {rem['remediation']}\n")
-        return "\n".join(lines)

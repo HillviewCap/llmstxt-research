@@ -1,0 +1,34 @@
+# Configuration for the Reporting System
+
+# Alert System Settings
+alert_system:
+  # Default severity threshold for triggering alerts.
+  # Possible values: INFO, LOW, MEDIUM, HIGH, CRITICAL
+  severity_threshold: "HIGH"
+
+  # Notification channels
+  # Enable or disable specific channels and configure their parameters.
+  notifications:
+    log:
+      enabled: true
+      log_file: "alerts.log" # Path relative to the project root or absolute
+    email:
+      enabled: false # Disabled by default, requires mail server setup
+      smtp_server: "smtp.example.com"
+      smtp_port: 587
+      smtp_user: "user@example.com"
+      smtp_password: "password"
+      sender_email: "alerts@llmstxt.example.com"
+      recipient_emails: # List of emails
+        - "admin1@example.com"
+        - "security_team@example.com"
+
+# Dashboard Settings (if any specific configurations are needed in the future)
+dashboard:
+  # Example: default_time_range: "7d"
+  pass
+
+# Report Generator Settings (if any specific configurations are needed in the future)
+report_generator:
+  # Example: custom_logo_path: "path/to/logo.png"
+  pass
