@@ -85,10 +85,31 @@ class FalsePositiveReducer:
         """
         if not self.model:
             self.logger.error("No false positive classifier model loaded")
-            return [{"error": "No model loaded", "finding_id": finding.get("id", "unknown")} 
+            return [{"error": "No model loaded", "finding_id": finding.get("id", "unknown")}
                     for finding in findings]
         
         self.logger.info(f"Classifying {len(findings)} findings")
+        
+        # Check if we're using a placeholder model
+        if isinstance(self.model, dict) and self.model.get("model_type") == "placeholder":
+            self.logger.info("Using placeholder model for false positive classification")
+            # Generate simulated classification results
+            results = []
+            for finding in findings:
+                finding_id = finding.get("id", "unknown")
+                # Most findings are true positives (70-80%)
+                false_positive_likelihood = np.random.uniform(0.0, 0.3)
+                # Some findings are more likely to be false positives
+                if np.random.random() < 0.2:  # 20% chance
+                    false_positive_likelihood = np.random.uniform(0.7, 0.9)
+                
+                results.append({
+                    "finding_id": finding_id,
+                    "false_positive_likelihood": float(false_positive_likelihood),
+                    "confidence": 0.8,
+                    "explanation": "Simulated classification from placeholder model"
+                })
+            return results
         
         # Create a mapping from content_id to content_item for efficient lookup
         content_map = {item.get("processed_id", ""): item for item in content_items}

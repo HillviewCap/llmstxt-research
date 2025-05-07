@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 
 class DomainReputationService:
@@ -54,7 +54,7 @@ class ContentPurposeDetector:
                                    Example:
                                    {
                                        "credential": {"keywords": ["password", "api_key"], "weight": 1.0},
-                                       "code": {"keywords": ["def ", "function"], "patterns": [r"class\s+\w+"], "weight": 0.8},
+                                       "code": {"keywords": ["def ", "function"], "patterns": [r"class\\s+\\w+"], "weight": 0.8},
                                        "documentation": {"keywords": ["introduction", "overview"], "weight": 0.6}
                                    }
         :param default_purpose: The purpose to return if no other purpose is detected.

@@ -47,19 +47,38 @@ class TemporalAnalysis:
         Returns:
             Dictionary with temporal analysis results
         """
-        # Track version
-        version, is_new_version = self._version_tracker.track_version(url, content, processed_content_id)
-        
-        results = {
-            'url': url,
-            'version': version.version_number,
-            'timestamp': version.timestamp.isoformat(),
-            'is_new_version': is_new_version,
-            'changes_detected': False,
-            'suspicious_changes': [],
-            'gradual_modifications': [],
-            'trend_analysis': {}
-        }
+        try:
+            # Track version
+            version, is_new_version = self._version_tracker.track_version(url, content, processed_content_id)
+            
+            # Extract version data while still in session
+            version_number = version.version_number
+            timestamp = version.timestamp.isoformat() if version.timestamp else datetime.now().isoformat()
+            
+            results = {
+                'url': url,
+                'version': version_number,
+                'timestamp': timestamp,
+                'is_new_version': is_new_version,
+                'changes_detected': False,
+                'suspicious_changes': [],
+                'gradual_modifications': [],
+                'trend_analysis': {}
+            }
+        except Exception as e:
+            # Handle database errors gracefully
+            print(f"Error in temporal analysis version tracking: {e}")
+            results = {
+                'url': url,
+                'error': str(e),
+                'timestamp': datetime.now().isoformat(),
+                'is_new_version': False,
+                'changes_detected': False,
+                'suspicious_changes': [],
+                'gradual_modifications': [],
+                'trend_analysis': {}
+            }
+            return results
         
         # If this is a new version, perform change detection
         if is_new_version and version.version_number > 1:

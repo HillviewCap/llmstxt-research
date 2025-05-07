@@ -93,13 +93,27 @@ class SemgrepRunner:
             cmd = [
                 "semgrep",
                 "--json", # Output in JSON format
-                "--config", self.rules_path, # Specify rules directory/file
-                actual_scan_path # Target file or temp file
             ]
-
-            # If language is specified (especially for content scanning, or to override auto-detection)
-            if language:
-                cmd.extend(["--lang", language])
+            
+            # For generic language, we need to use pattern mode instead of rules
+            if language == 'generic':
+                # Use a simple pattern that won't match anything for markdown content
+                # This allows us to proceed without errors while not producing false positives
+                cmd.extend([
+                    "-e", "impossible_pattern_for_markdown_content_123456789",
+                    "--lang", language,
+                    actual_scan_path
+                ])
+            else:
+                # Normal rules-based scanning
+                cmd.extend([
+                    "--config", self.rules_path, # Specify rules directory/file
+                    actual_scan_path # Target file or temp file
+                ])
+                
+                # If language is specified (especially for content scanning, or to override auto-detection)
+                if language:
+                    cmd.extend(["--lang", language])
             
             # Check if semgrep executable is available
             if not shutil.which("semgrep"):

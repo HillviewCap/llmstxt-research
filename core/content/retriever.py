@@ -89,12 +89,35 @@ class ContentRetriever:
         # In a real implementation, this would query the database or external sources
         
         # Return a dummy content item for testing
+        # For URL queries, try to use the query as the URL
+        if query and isinstance(query, str) and (query.startswith('http://') or query.startswith('https://')):
+            print(f"Using query as URL: {query}")
+            try:
+                content = retrieve_url_content(query, use_cache=True)
+                return [
+                    {
+                        "id": "test-content-1",
+                        "type": "markdown",
+                        "source": query,  # Use the actual URL
+                        "language": "markdown",  # Add language for static analyzer
+                        "content": content,
+                        "raw_content": content,  # Add raw_content for temporal analysis
+                        "metadata": {"timestamp": "2023-01-01T00:00:00Z"}
+                    }
+                ]
+            except ContentRetrievalError as e:
+                print(f"Error retrieving content from URL {query}: {e}")
+                # Fall back to test content but with proper URL
+        
+        # Default test content with proper URL format
         return [
             {
                 "id": "test-content-1",
                 "type": "markdown",
-                "source": "test",
+                "source": "https://example.com/test",  # Valid URL format
+                "language": "markdown",  # Add language for static analyzer
                 "content": "# Test Content\n\nThis is a test content item.",
+                "raw_content": "# Test Content\n\nThis is a test content item.",  # Add raw_content for temporal analysis
                 "metadata": {"timestamp": "2023-01-01T00:00:00Z"}
             }
         ]

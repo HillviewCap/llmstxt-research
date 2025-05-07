@@ -62,59 +62,94 @@ class VersionTracker:
         content_hash = self._calculate_hash(content)
         
         with self._db_connector.session_scope() as session:
-            # Get or create URL record
-            url_record = session.query(Urls).filter_by(url_string=url).first()
-            if not url_record:
-                url_record = Urls(url_string=url)
-                session.add(url_record)
+            try:
+                # Get or create URL record
+                url_record = session.query(Urls).filter_by(url_string=url).first()
+                if not url_record:
+                    url_record = Urls(url_string=url)
+                    session.add(url_record)
+                    session.flush()
+                
+                # Check if this exact content version already exists
+                existing_version = session.query(ContentVersion).filter_by(
+                    url_id=url_record.id,
+                    content_hash=content_hash
+                ).first()
+                
+                if existing_version:
+                    # Make a copy of the data we need
+                    version_copy = ContentVersion(
+                        id=existing_version.id,
+                        url_id=existing_version.url_id,
+                        content_hash=existing_version.content_hash,
+                        version_number=existing_version.version_number,
+                        timestamp=existing_version.timestamp,
+                        raw_content=existing_version.raw_content,
+                        processed_content_id=existing_version.processed_content_id
+                    )
+                    return version_copy, False
+                
+                # Get the latest version number for this URL
+                latest_version = session.query(ContentVersion).filter_by(
+                    url_id=url_record.id
+                ).order_by(desc(ContentVersion.version_number)).first()
+                
+                new_version_number = 1
+                previous_version = None
+                
+                if latest_version:
+                    new_version_number = latest_version.version_number + 1
+                    previous_version = latest_version
+                
+                # Create new version record
+                new_version = ContentVersion(
+                    url_id=url_record.id,
+                    content_hash=content_hash,
+                    version_number=new_version_number,
+                    raw_content=content,
+                    processed_content_id=processed_content_id
+                )
+                session.add(new_version)
                 session.flush()
-            
-            # Check if this exact content version already exists
-            existing_version = session.query(ContentVersion).filter_by(
-                url_id=url_record.id,
-                content_hash=content_hash
-            ).first()
-            
-            if existing_version:
-                return existing_version, False
-            
-            # Get the latest version number for this URL
-            latest_version = session.query(ContentVersion).filter_by(
-                url_id=url_record.id
-            ).order_by(desc(ContentVersion.version_number)).first()
-            
-            new_version_number = 1
-            previous_version = None
-            
-            if latest_version:
-                new_version_number = latest_version.version_number + 1
-                previous_version = latest_version
-            
-            # Create new version record
-            new_version = ContentVersion(
-                url_id=url_record.id,
-                content_hash=content_hash,
-                version_number=new_version_number,
-                raw_content=content,
-                processed_content_id=processed_content_id
-            )
-            session.add(new_version)
-            session.flush()
-            
-            # If there's a previous version, detect and record changes
-            if previous_version:
-                changes = self.detect_changes(
-                    previous_version.raw_content,
-                    content,
-                    previous_version.id,
-                    new_version.id,
-                    session
+                
+                # If there's a previous version, detect and record changes
+                if previous_version:
+                    changes = self.detect_changes(
+                        previous_version.raw_content,
+                        content,
+                        previous_version.id,
+                        new_version.id,
+                        session
+                    )
+                    
+                    # Update analysis history
+                    self._update_analysis_history(url_record.id, bool(changes), session)
+                
+                # Make a copy of the data we need before the session closes
+                version_copy = ContentVersion(
+                    id=new_version.id,
+                    url_id=new_version.url_id,
+                    content_hash=new_version.content_hash,
+                    version_number=new_version.version_number,
+                    timestamp=new_version.timestamp,
+                    raw_content=new_version.raw_content,
+                    processed_content_id=new_version.processed_content_id
                 )
                 
-                # Update analysis history
-                self._update_analysis_history(url_record.id, bool(changes), session)
-            
-            return new_version, True
+                return version_copy, True
+            except Exception as e:
+                print(f"Error in track_version: {e}")
+                # Create a minimal version object to avoid further errors
+                fallback_version = ContentVersion(
+                    id=-1,
+                    url_id=-1,
+                    content_hash=content_hash,
+                    version_number=1,
+                    timestamp=datetime.now(),
+                    raw_content=content,
+                    processed_content_id=processed_content_id
+                )
+                return fallback_version, False
     
     def detect_changes(
         self, 

@@ -36,8 +36,7 @@ class PatternAnalysisOrchestrator:
         
         # Check if rules actually loaded, for early feedback
         if self.yara_rule_manager.get_compiled_rules() is None or \
-           len(self.yara_rule_manager.get_compiled_rules()) == 0 and \
-           "dummy" not in str(self.yara_rule_manager.get_compiled_rules()): # crude check for dummy
+           "dummy" in str(self.yara_rule_manager.get_compiled_rules()): # crude check for dummy
             # The dummy rule is "rule dummy {condition: false}"
             # A more robust check would be if yara_rule_manager.rules.get_rules() is empty or only has 'dummy'
             # For now, let's assume YaraRuleManager constructor logs issues.

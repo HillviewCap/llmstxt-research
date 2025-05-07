@@ -1,0 +1,82 @@
+# LLMs.txt Research Analysis Configuration
+
+# Database configuration
+db:
+  path: "researchdb/llms_metadata.db"
+  backup_enabled: true
+  backup_interval: 86400  # 24 hours in seconds
+
+# Content retrieval settings
+content:
+  timeout: 30  # seconds
+  max_retries: 3
+  cache_enabled: true
+  cache_ttl: 3600  # 1 hour in seconds
+  user_agent: "LLMsResearch/1.0"
+
+# Analysis settings
+analysis:
+  # Static analysis configuration
+  static:
+    enabled: true
+    rules_path: "rules/semgrep"
+    default_language: "markdown"  # Default language when not specified
+    timeout: 60  # seconds
+
+  # Pattern analysis configuration
+  patterns:
+    enabled: true
+    rules_path: "rules/patterns"
+    sensitivity: "medium"  # low, medium, high
+
+  # Secrets analysis configuration
+  secrets:
+    enabled: true
+    rules_path: "rules/secrets"
+    sensitivity: "high"
+
+  # Markdown analysis configuration
+  markdown:
+    enabled: true
+    check_links: true
+    validate_structure: true
+
+# Temporal analysis settings
+temporal:
+  enabled: true
+  version_tracking: true
+  change_detection: true
+  suspicion_threshold: 0.7  # Threshold for suspicious changes (0.0-1.0)
+
+# ML analysis settings
+ml:
+  enabled: true
+  anomaly_detection:
+    model_path: "models/anomaly_detection.pkl"
+    threshold: 0.8
+  false_positive_reduction:
+    model_path: "models/false_positive_classifier.pkl"
+    threshold: 0.7
+
+# Scoring and risk assessment
+scoring:
+  config_path: "config/scoring_config.yaml"
+  severity_thresholds:
+    low: 0.3
+    medium: 0.6
+    high: 0.8
+    critical: 0.95
+
+# Reporting configuration
+reporting:
+  config_path: "config/reporting.yaml"
+  template_path: "config/report_template.html"
+  output_dir: "reports"
+  formats:
+    - html
+    - json
+
+# Logging configuration
+logging:
+  level: "INFO"
+  file: "logs/analysis.log"

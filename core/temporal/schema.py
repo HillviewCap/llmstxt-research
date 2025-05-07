@@ -32,7 +32,9 @@ class ContentVersion(Base):
     # Relationships
     url_source = relationship("Urls", backref="content_versions")
     processed_content = relationship("ProcessedMarkdownContent", backref="version_info")
-    changes = relationship("ContentChange", back_populates="version")
+    changes = relationship("ContentChange",
+                          foreign_keys="ContentChange.version_id",
+                          back_populates="version")
     
     __table_args__ = (
         Index("idx_url_version", "url_id", "version_number", unique=True),
@@ -57,8 +59,12 @@ class ContentChange(Base):
     suspicion_score = Column(Float, nullable=True)  # Score indicating how suspicious the change is
     
     # Relationships
-    version = relationship("ContentVersion", foreign_keys=[version_id], back_populates="changes")
-    previous_version = relationship("ContentVersion", foreign_keys=[previous_version_id])
+    version = relationship("ContentVersion",
+                          foreign_keys=[version_id],
+                          back_populates="changes")
+    previous_version = relationship("ContentVersion",
+                                   foreign_keys=[previous_version_id],
+                                   backref="previous_changes")
 
 
 class HistoricalRiskScore(Base):

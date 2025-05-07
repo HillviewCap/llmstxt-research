@@ -25,7 +25,7 @@ class Pipeline:
         self.config = config or {}
         self.db = DatabaseConnector(self.config.get("db"))
         self.content_retriever = ContentRetriever(self.db)
-        self.content_processor = ContentProcessor()
+        self.content_processor = ContentProcessor(self.db)
         self.markdown_analyzer = MarkdownAnalyzer()
         self.pattern_analyzer = PatternAnalyzer()
         self.secrets_analyzer = SecretsAnalyzer()
@@ -83,7 +83,7 @@ class Pipeline:
             # 2. Process content
             t0 = time.time()
             try:
-                processed_items = [self.content_processor.process(item) for item in content_items]
+                processed_items = [self.content_processor.process_pipeline_item(item) for item in content_items]
                 self.performance['content_processing'] = time.time() - t0
                 self.logger.info(f"Processed {len(processed_items)} items.")
             except Exception as e:
@@ -182,14 +182,20 @@ class Pipeline:
             # 7. Reporting
             t0 = time.time()
             try:
-                report = self.reporting_manager.generate_report(
-                    content_items=content_items, # Pass original content items
-                    analysis_results=analysis_results, # Pass all results, including errors
-                    scores=scores,
-                    risks=risks,
-                    temporal_results=temporal_results,  # Add temporal analysis results
-                    ml_results=ml_results  # Add ML analysis results
-                )
+                # First process the findings
+                all_findings = []
+                for result in analysis_results:
+                    # Extract findings from each analyzer's results
+                    for analyzer_type, analyzer_result in result.items():
+                        if isinstance(analyzer_result, dict) and "findings" in analyzer_result:
+                            all_findings.extend(analyzer_result["findings"])
+                
+                # Process findings and temporal results
+                self.reporting_manager.process_findings(all_findings)
+                self.reporting_manager.process_temporal_results(temporal_results)
+                
+                # Generate the HTML report
+                report = self.reporting_manager.generate_html_report()
                 self.performance['reporting'] = time.time() - t0
                 self.logger.info("Reporting completed.")
             except Exception as e:

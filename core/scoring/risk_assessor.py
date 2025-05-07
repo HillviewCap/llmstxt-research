@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from .scoring_model import ScoringModel, ScoringModelConfig
 from .classification import (

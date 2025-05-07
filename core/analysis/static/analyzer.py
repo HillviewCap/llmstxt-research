@@ -28,12 +28,36 @@ class StaticAnalyzer:
                 item_id = data.get('id', 'unknown') # For logging
 
                 if content_to_scan and lang_for_scan:
-                    print(f"Static analyzing in-memory content (lang: {lang_for_scan}). ID: {item_id}")
-                    findings = self.semgrep_runner.run(content=content_to_scan, language=lang_for_scan)
+                    # Check if the language is supported by semgrep
+                    supported_languages = [
+                        "apex", "bash", "c", "c#", "c++", "cairo", "circom", "clojure",
+                        "cpp", "csharp", "dart", "docker", "dockerfile", "elixir", "ex",
+                        "generic", "go", "golang", "hack", "hcl", "html", "java",
+                        "javascript", "js", "json", "jsonnet", "julia", "kotlin", "kt",
+                        "lisp", "lua", "move_on_aptos", "move_on_sui", "none", "ocaml",
+                        "php", "promql", "proto", "proto3", "protobuf", "py", "python",
+                        "python2", "python3", "ql", "r", "regex", "ruby", "rust", "scala",
+                        "scheme", "sh", "sol", "solidity", "swift", "terraform", "tf",
+                        "ts", "typescript", "vue", "xml", "yaml"
+                    ]
+                    
+                    # If language is markdown, use 'generic' instead
+                    effective_language = lang_for_scan
+                    if lang_for_scan.lower() == 'markdown' or lang_for_scan.lower() == 'md':
+                        effective_language = 'generic'
+                        print(f"Converting markdown language to 'generic' for semgrep compatibility. ID: {item_id}")
+                    
+                    # If language is not supported, use 'generic'
+                    if effective_language.lower() not in [lang.lower() for lang in supported_languages]:
+                        print(f"Language '{lang_for_scan}' not supported by semgrep, using 'generic' instead. ID: {item_id}")
+                        effective_language = 'generic'
+                    
+                    print(f"Static analyzing in-memory content (lang: {effective_language}). ID: {item_id}")
+                    findings = self.semgrep_runner.run(content=content_to_scan, language=effective_language)
                 elif content_to_scan and not lang_for_scan:
-                    raise StaticAnalyzerError(
-                        f"Language must be provided for in-memory content analysis. Content ID: {item_id}"
-                    )
+                    # Default to generic for content without a specified language
+                    print(f"No language specified for content analysis, using 'generic'. ID: {item_id}")
+                    findings = self.semgrep_runner.run(content=content_to_scan, language='generic')
                 elif not content_to_scan:
                     raise StaticAnalyzerError(
                         f"Input dictionary for analysis is missing 'content' key. ID: {item_id}"
