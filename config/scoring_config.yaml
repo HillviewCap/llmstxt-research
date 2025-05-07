@@ -1,0 +1,33 @@
+# Sample configuration for the Risk Scoring System
+
+scoring_model:
+  dimensions:
+    impact: 0.5
+    likelihood: 0.3
+    exposure: 0.2
+  confidence_weight: 1.0
+
+severity_thresholds:
+  critical: 0.85
+  high: 0.7
+  medium: 0.5
+  low: 0.3
+  info: 0.0
+
+category_keywords:
+  credential_exposure:
+    - password
+    - api_key
+    - secret
+  prompt_injection:
+    - prompt
+    - injection
+    - instruction
+  code_execution:
+    - exec
+    - eval
+    - code
+  documentation_issue:
+    - documentation
+    - overview
+    - introduction

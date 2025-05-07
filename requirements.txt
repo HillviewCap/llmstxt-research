@@ -1,0 +1,35 @@
+# LLMs.txt Security Analysis Platform - Requirements
+# Compatible with UV package manager
+
+# ---------------------------
+# Core Dependencies
+# ---------------------------
+sqlalchemy            # Database ORM
+pandas                # Data manipulation
+mistune               # Markdown parsing
+pyyaml                # Configuration management
+loguru                # Logging
+chardet               # Character encoding detection
+
+# ---------------------------
+# Security Analysis Tools
+# ---------------------------
+semgrep               # Static code analysis
+truffleHog            # Credential scanning
+yara-python           # Pattern matching
+bandit                # Python security linting
+#owasp-dependency-check # Dependency scanning
+
+# ---------------------------
+# Machine Learning Libraries
+# ---------------------------
+scikit-learn          # ML algorithms
+#tensorflow            # Deep learning (if needed)
+transformers # NLP capabilities
+
+# ---------------------------
+# Visualization & Reporting
+# ---------------------------
+plotly                # Interactive visualizations
+jinja2                # Template rendering
+markdown              # Markdown processing

@@ -1,0 +1,12 @@
+rules:
+  - id: python.eval.injection
+    languages: [python]
+    message: "Use of eval() detected. This can lead to code injection vulnerabilities."
+    severity: WARNING
+    category: security
+    priority: High
+    pattern: eval($EXPR)
+    metadata:
+      cwe: "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      references:
+        - https://docs.python.org/3/library/functions.html#eval
