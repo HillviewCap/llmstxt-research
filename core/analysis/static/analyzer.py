@@ -13,7 +13,9 @@ class StaticAnalyzer:
         print(f"StaticAnalyzer initialized with rules_path: {rules_path}")
         self.rules_path = rules_path
         self.rule_manager = RuleManager(rules_path)
-        self.semgrep_runner = SemgrepRunner(rules_path)
+        # Add Semgrep registry rulesets for gitleaks and OWASP Top Ten
+        self.registry_rulesets = ["p/gitleaks", "p/owasp-top-ten"]
+        self.semgrep_runner = SemgrepRunner(rules_path, registry_rulesets=self.registry_rulesets)
         self.finding_manager = FindingManager()
 
     def analyze(self, data: Any, language: Optional[str] = None) -> List[Dict[str, Any]]:

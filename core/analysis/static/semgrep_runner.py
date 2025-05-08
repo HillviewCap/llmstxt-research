@@ -1,6 +1,7 @@
 import subprocess
 import json
 import os
+import signal
 import tempfile
 import shutil
 from typing import List, Dict, Any, Optional
@@ -9,9 +10,10 @@ class SemgrepRunnerError(Exception):
     pass
 
 class SemgrepRunner:
-    def __init__(self, rules_path: str, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, rules_path: str, config: Optional[Dict[str, Any]] = None, registry_rulesets: Optional[List[str]] = None):
         self.rules_path = rules_path
         self.config = config or {}
+        self.registry_rulesets = registry_rulesets or []
         self.rules = self._load_rules()
         self.rule_metadata = self._extract_rule_metadata()
 
@@ -106,10 +108,15 @@ class SemgrepRunner:
                 ])
             else:
                 # Normal rules-based scanning
-                cmd.extend([
-                    "--config", self.rules_path, # Specify rules directory/file
-                    actual_scan_path # Target file or temp file
-                ])
+                # Add local rules path
+                cmd.extend(["--config", self.rules_path])
+                
+                # Add registry rulesets if specified
+                for ruleset in self.registry_rulesets:
+                    cmd.extend(["--config", ruleset])
+                
+                # Add target file
+                cmd.append(actual_scan_path)
                 
                 # If language is specified (especially for content scanning, or to override auto-detection)
                 if language:
@@ -121,7 +128,7 @@ class SemgrepRunner:
 
             # Execute Semgrep
             # check=False because Semgrep returns 1 for findings, which would raise CalledProcessError
-            process = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            process = self.run_with_process_group_timeout(cmd, timeout=60)
 
             # Semgrep exit codes:
             # 0: No findings
@@ -173,3 +180,41 @@ class SemgrepRunner:
             {"id": rule_id, **meta}
             for rule_id, meta in self.rule_metadata.items()
         ]
+        
+    def run_with_process_group_timeout(self, cmd, timeout=60):
+        """Run command with timeout, ensuring all child processes are terminated"""
+        # Start process in new process group
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=os.setsid  # Create new process group
+        )
+        
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            # Construct a result object similar to subprocess.CompletedProcess
+            # to maintain compatibility with existing code
+            return type('CompletedProcess', (), {
+                'returncode': process.returncode,
+                'stdout': stdout,
+                'stderr': stderr,
+                'args': cmd
+            })
+        except subprocess.TimeoutExpired:
+            # Kill entire process group
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # Try SIGTERM first
+                process.wait(timeout=5)  # Give time for graceful shutdown
+            except (subprocess.TimeoutExpired, ProcessLookupError):
+                # If still running or already gone, try SIGKILL
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # Process already gone
+            # Raise an error to indicate timeout
+            raise SemgrepRunnerError(f"Semgrep analysis timed out after {timeout} seconds for command: {' '.join(cmd)}")
+        except Exception as e:
+            # Catch other potential errors during Popen or communicate
+            raise SemgrepRunnerError(f"Error during semgrep execution: {e} for command: {' '.join(cmd)}")

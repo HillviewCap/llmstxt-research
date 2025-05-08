@@ -7,6 +7,7 @@ Implements: workflow orchestration, performance optimization, error handling, re
 
 import time
 import logging
+import threading
 import concurrent.futures
 from core.database.connector import DatabaseConnector
 from core.content.retriever import ContentRetriever
@@ -101,12 +102,22 @@ class Pipeline:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_item_idx = {}
                     for i, item in enumerate(processed_items):
-                        future_to_item_idx[executor.submit(self._analyze_item, item)] = i
+                        # Use thread-level timeout wrapper with 180 seconds timeout
+                        future_to_item_idx[executor.submit(self._execute_with_thread_timeout,
+                                                          self._analyze_item,
+                                                          (item,),
+                                                          180)] = i
 
                     for future in concurrent.futures.as_completed(future_to_item_idx):
                         item_idx = future_to_item_idx[future]
                         try:
-                            analysis_results[item_idx] = future.result()
+                            result = future.result()
+                            # Check if result is an error dictionary from the timeout wrapper
+                            if isinstance(result, dict) and "error" in result:
+                                self.logger.error(f"Analysis for item {item_idx} failed: {result['error']}")
+                                analysis_results[item_idx] = result
+                            else:
+                                analysis_results[item_idx] = result
                         except Exception as exc:
                             self.logger.error(f"Analysis for item {item_idx} generated an exception: {exc}", exc_info=True)
                             analysis_results[item_idx] = {"error": str(exc)} # Store error info
@@ -255,3 +266,45 @@ class Pipeline:
     def reset(self):
         """Reset pipeline state if needed."""
         self.__init__(self.config)
+        
+    def _execute_with_thread_timeout(self, func, args_tuple, timeout_seconds):
+        """
+        Executes a function 'func' with 'args_tuple' in a separate thread
+        with a specified timeout.
+        Returns the function's result or an error dictionary if timeout occurs.
+        
+        Args:
+            func: The function to execute
+            args_tuple: Tuple of arguments to pass to the function
+            timeout_seconds: Maximum execution time in seconds
+            
+        Returns:
+            The function result or an error dictionary if timeout occurs
+        """
+        result_container = [None]  # Using a list to pass result by reference
+        error_container = [None]   # Using a list to pass error by reference
+        completed_event = threading.Event()
+        
+        def target_wrapper():
+            try:
+                result_container[0] = func(*args_tuple)
+            except Exception as e:
+                # Capture any exception from the target function
+                error_container[0] = e
+            finally:
+                completed_event.set()
+        
+        worker_thread = threading.Thread(target=target_wrapper)
+        worker_thread.daemon = True  # Allow main program to exit even if thread is running
+        worker_thread.start()
+        
+        if completed_event.wait(timeout=timeout_seconds):
+            if error_container[0] is not None:
+                # Return an error dictionary if the function raised an exception
+                return {"error": f"Analysis failed: {str(error_container[0])}"}
+            
+            return result_container[0]  # Return the actual result
+        else:
+            # Timeout occurred
+            self.logger.error(f"Analysis thread timed out after {timeout_seconds} seconds")
+            return {"error": f"Analysis thread timed out after {timeout_seconds} seconds"}
