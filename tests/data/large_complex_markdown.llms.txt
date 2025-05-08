@@ -1,0 +1,227 @@
+# Large Complex Markdown Document
+
+This document is designed to test the static analysis timeout fix. It contains patterns that might cause semgrep to hang when analyzed as generic content.
+
+## Code Blocks (these can cause regex engines to struggle)
+
+```python
+def recursive_function(n):
+    if n <= 0:
+        return 1
+    else:
+        return n * recursive_function(n-1)
+
+# Call with a large number
+result = recursive_function(100)
+print(f"Result: {result}")
+```
+
+```javascript
+// Complex nested loops
+function complexOperation() {
+    let result = 0;
+    for (let i = 0; i < 1000; i++) {
+        for (let j = 0; j < 1000; j++) {
+            for (let k = 0; k < 100; k++) {
+                result += i * j * k;
+            }
+        }
+    }
+    return result;
+}
+```
+
+## Wiki-style Links (these can cause regex engines to struggle)
+
+[[Link to page 1]] connects to [[Link to page 2]] which connects to [[Link to page 3]]
+[[Nested [[links]] can be particularly problematic]]
+[[Links with [[multiple]] [[nested]] elements]]
+
+## Template Syntax (these can cause regex engines to struggle)
+
+{{template.function(param1, param2)}}
+{{nested.{{template}}.function()}}
+{{complex.template(param1="value1", param2=[1,2,3], param3={{nested.template}})}}
+## Repetitive Content (to increase size)
+
+<!-- Adding repetitive content to make the file large enough to trigger timeouts -->
+
+```python
+# Large function with many nested conditions
+def complex_function(input_data):
+    result = []
+    if isinstance(input_data, dict):
+        for key, value in input_data.items():
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        for sub_key, sub_value in item.items():
+                            if isinstance(sub_value, str):
+                                result.append(sub_value.upper())
+                            elif isinstance(sub_value, int):
+                                result.append(sub_value * 2)
+                            elif isinstance(sub_value, float):
+                                result.append(int(sub_value))
+                            elif isinstance(sub_value, bool):
+                                result.append(not sub_value)
+                            else:
+                                result.append(str(sub_value))
+                    elif isinstance(item, list):
+                        for sub_item in item:
+                            if isinstance(sub_item, str):
+                                result.append(sub_item.lower())
+                            else:
+                                result.append(str(sub_item))
+                    elif isinstance(item, str):
+                        result.append(item.capitalize())
+                    else:
+                        result.append(str(item))
+            elif isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    result.append(f"{sub_key}:{sub_value}")
+            else:
+                result.append(str(value))
+    elif isinstance(input_data, list):
+        for item in input_data:
+            if isinstance(item, dict):
+                for key, value in item.items():
+                    result.append(f"{key}={value}")
+            else:
+                result.append(str(item))
+    else:
+        result.append(str(input_data))
+    return result
+```
+
+<!-- Repeat this pattern many times to create a large file -->
+
+{{template.function(param1, param2)}}
+{{nested.{{template}}.function()}}
+{{complex.template(param1="value1", param2=[1,2,3], param3={{nested.template}})}}
+
+[[Link to page 1]] connects to [[Link to page 2]] which connects to [[Link to page 3]]
+[[Nested [[links]] can be particularly problematic]]
+[[Links with [[multiple]] [[nested]] elements]]
+
+```javascript
+// More complex code
+function generateComplexData() {
+    const result = [];
+    for (let i = 0; i < 100; i++) {
+        const item = {
+            id: `item-${i}`,
+            values: [],
+            metadata: {
+                created: new Date().toISOString(),
+                modified: new Date().toISOString(),
+                tags: ['tag1', 'tag2', 'tag3']
+            }
+        };
+        
+        for (let j = 0; j < 50; j++) {
+            item.values.push({
+                subId: `subitem-${i}-${j}`,
+                value: Math.random() * 1000,
+                properties: {
+                    visible: j % 2 === 0,
+                    priority: j % 3,
+                    category: `category-${j % 5}`
+                }
+            });
+        }
+        
+        result.push(item);
+    }
+    return result;
+}
+```
+
+<!-- Repeat the patterns to increase complexity -->
+
+{{template.function(param1, param2)}}
+{{nested.{{template}}.function()}}
+{{complex.template(param1="value1", param2=[1,2,3], param3={{nested.template}})}}
+{{template.function(param1, param2)}}
+{{nested.{{template}}.function()}}
+{{complex.template(param1="value1", param2=[1,2,3], param3={{nested.template}})}}
+
+[[Link to page 1]] connects to [[Link to page 2]] which connects to [[Link to page 3]]
+[[Nested [[links]] can be particularly problematic]]
+[[Links with [[multiple]] [[nested]] elements]]
+[[Link to page 1]] connects to [[Link to page 2]] which connects to [[Link to page 3]]
+[[Nested [[links]] can be particularly problematic]]
+[[Links with [[multiple]] [[nested]] elements]]
+
+<!-- Add more repetitive content to make the file even larger -->
+
+```python
+# Another complex function
+def process_data(data, transformations=None):
+    if transformations is None:
+        transformations = ['uppercase', 'lowercase', 'capitalize', 'reverse']
+    
+    results = {}
+    
+    for item_id, item_data in data.items():
+        results[item_id] = {}
+        
+        for field, value in item_data.items():
+            processed_values = {}
+            
+            for transform in transformations:
+                if transform == 'uppercase' and isinstance(value, str):
+                    processed_values[transform] = value.upper()
+                elif transform == 'lowercase' and isinstance(value, str):
+                    processed_values[transform] = value.lower()
+                elif transform == 'capitalize' and isinstance(value, str):
+                    processed_values[transform] = value.capitalize()
+                elif transform == 'reverse' and isinstance(value, str):
+                    processed_values[transform] = value[::-1]
+                elif transform == 'length' and isinstance(value, (list, str, dict)):
+                    processed_values[transform] = len(value)
+                elif transform == 'type':
+                    processed_values[transform] = type(value).__name__
+                elif transform == 'is_empty' and isinstance(value, (list, str, dict)):
+                    processed_values[transform] = len(value) == 0
+                elif transform == 'keys' and isinstance(value, dict):
+                    processed_values[transform] = list(value.keys())
+                elif transform == 'values' and isinstance(value, dict):
+                    processed_values[transform] = list(value.values())
+                elif transform == 'items' and isinstance(value, dict):
+                    processed_values[transform] = list(value.items())
+                elif transform == 'sum' and isinstance(value, (list, tuple)) and all(isinstance(x, (int, float)) for x in value):
+                    processed_values[transform] = sum(value)
+                elif transform == 'product' and isinstance(value, (list, tuple)) and all(isinstance(x, (int, float)) for x in value):
+                    product = 1
+                    for x in value:
+                        product *= x
+                    processed_values[transform] = product
+                else:
+                    processed_values[transform] = None
+            
+            results[item_id][field] = processed_values
+    
+    return results
+```
+
+<!-- Repeat patterns to increase file size -->
+
+{{template.function(param1, param2)}}
+{{nested.{{template}}.function()}}
+{{complex.template(param1="value1", param2=[1,2,3], param3={{nested.template}})}}
+{{template.function(param1, param2)}}
+{{nested.{{template}}.function()}}
+{{complex.template(param1="value1", param2=[1,2,3], param3={{nested.template}})}}
+{{template.function(param1, param2)}}
+{{nested.{{template}}.function()}}
+{{complex.template(param1="value1", param2=[1,2,3], param3={{nested.template}})}}
+
+[[Link to page 1]] connects to [[Link to page 2]] which connects to [[Link to page 3]]
+[[Nested [[links]] can be particularly problematic]]
+[[Links with [[multiple]] [[nested]] elements]]
+[[Link to page 1]] connects to [[Link to page 2]] which connects to [[Link to page 3]]
+[[Nested [[links]] can be particularly problematic]]
+[[Links with [[multiple]] [[nested]] elements]]
+[[Link to page 1]] connects to [[Link to page 2]] which connects to [[Link to page 3]]
+[[Nested [[links]] can be particularly problematic]]
+[[Links with [[multiple]] [[nested]] elements]]

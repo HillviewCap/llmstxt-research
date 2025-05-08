@@ -9,6 +9,9 @@ import time
 import logging
 import threading
 import concurrent.futures
+import os
+import signal
+import psutil
 from core.database.connector import DatabaseConnector
 from core.content.retriever import ContentRetriever
 from core.content.processor import ContentProcessor
@@ -30,7 +33,14 @@ class Pipeline:
         self.markdown_analyzer = MarkdownAnalyzer()
         self.pattern_analyzer = PatternAnalyzer()
         self.secrets_analyzer = SecretsAnalyzer()
-        self.static_analyzer = StaticAnalyzer()
+        
+        # Configure static analyzer with performance limits
+        static_analyzer_config = {
+            "max_content_size": self.config.get("max_content_size", 1024 * 1024),  # 1MB default
+            "max_content_lines": self.config.get("max_content_lines", 10000)       # 10K lines default
+        }
+        self.static_analyzer = StaticAnalyzer(config=static_analyzer_config)
+        
         self.scoring_model = ScoringModel()
         self.risk_assessor = RiskAssessor()
         self.reporting_manager = ReportingManager()
@@ -44,6 +54,9 @@ class Pipeline:
         
         self.logger = logging.getLogger("Pipeline")
         self.performance = {}
+        
+        # Track running analysis threads
+        self.running_threads = {}
 
     def run(self, content_query=None):
         """
@@ -102,11 +115,20 @@ class Pipeline:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_item_idx = {}
                     for i, item in enumerate(processed_items):
-                        # Use thread-level timeout wrapper with 180 seconds timeout
-                        future_to_item_idx[executor.submit(self._execute_with_thread_timeout,
-                                                          self._analyze_item,
-                                                          (item,),
-                                                          180)] = i
+                        # Calculate dynamic timeout based on content size and complexity
+                        timeout = self._calculate_timeout(item)
+                        
+                        # Use thread-level timeout wrapper with dynamic timeout
+                        future = executor.submit(
+                            self._execute_with_thread_timeout,
+                            self._analyze_item,
+                            (item,),
+                            timeout
+                        )
+                        
+                        # Store item ID for better error reporting
+                        future.item_id = item.get('id', f'item-{i}')
+                        future_to_item_idx[future] = i
 
                     for future in concurrent.futures.as_completed(future_to_item_idx):
                         item_idx = future_to_item_idx[future]
@@ -114,12 +136,14 @@ class Pipeline:
                             result = future.result()
                             # Check if result is an error dictionary from the timeout wrapper
                             if isinstance(result, dict) and "error" in result:
-                                self.logger.error(f"Analysis for item {item_idx} failed: {result['error']}")
+                                item_id = getattr(future, 'item_id', f'item-{item_idx}')
+                                self.logger.error(f"Analysis for item {item_id} failed: {result['error']}")
                                 analysis_results[item_idx] = result
                             else:
                                 analysis_results[item_idx] = result
                         except Exception as exc:
-                            self.logger.error(f"Analysis for item {item_idx} generated an exception: {exc}", exc_info=True)
+                            item_id = getattr(future, 'item_id', f'item-{item_idx}')
+                            self.logger.error(f"Analysis for item {item_id} generated an exception: {exc}", exc_info=True)
                             analysis_results[item_idx] = {"error": str(exc)} # Store error info
                 self.performance['analysis'] = time.time() - t0
                 self.logger.info("Analysis stage completed.")
@@ -267,6 +291,55 @@ class Pipeline:
         """Reset pipeline state if needed."""
         self.__init__(self.config)
         
+    def _calculate_timeout(self, item):
+        """
+        Calculate appropriate timeout based on content size and complexity
+        
+        Args:
+            item: The content item to analyze
+            
+        Returns:
+            Timeout in seconds
+        """
+        # Base timeout
+        base_timeout = 60
+        
+        # Get content
+        content = item.get('content', '')
+        if not content:
+            return base_timeout
+            
+        # Calculate size factor (1 second per 10KB, up to 60 additional seconds)
+        content_size = len(content)
+        size_factor = min(content_size / 10240, 60)
+        
+        # Calculate complexity factor based on line count and special patterns
+        line_count = content.count('\n') + 1
+        line_factor = min(line_count / 100, 30)  # Up to 30 additional seconds
+        
+        # Check for complex patterns
+        complexity_factor = 0
+        complex_patterns = ['```', '{{', '[[', '<script', 'function(', 'def ', 'class ']
+        for pattern in complex_patterns:
+            pattern_count = content.count(pattern)
+            complexity_factor += min(pattern_count, 10)  # Up to 10 seconds per pattern type
+            
+        # Get language and adjust timeout for generic/markdown content
+        language = item.get('language', '').lower()
+        language_factor = 30 if language in ['generic', 'markdown', 'md'] else 0
+        
+        # Calculate total timeout
+        total_timeout = base_timeout + size_factor + line_factor + complexity_factor + language_factor
+        
+        # Cap at reasonable maximum
+        max_timeout = 300  # 5 minutes
+        timeout = min(total_timeout, max_timeout)
+        
+        item_id = item.get('id', 'unknown')
+        self.logger.info(f"Calculated timeout for item {item_id}: {timeout:.1f}s (size: {content_size/1024:.1f}KB, lines: {line_count})")
+        
+        return timeout
+    
     def _execute_with_thread_timeout(self, func, args_tuple, timeout_seconds):
         """
         Executes a function 'func' with 'args_tuple' in a separate thread
@@ -284,27 +357,113 @@ class Pipeline:
         result_container = [None]  # Using a list to pass result by reference
         error_container = [None]   # Using a list to pass error by reference
         completed_event = threading.Event()
+        thread_id = threading.get_ident()
+        
+        # Get item ID for better logging
+        item = args_tuple[0] if args_tuple else None
+        item_id = item.get('id', 'unknown') if isinstance(item, dict) else 'unknown'
+        
+        # Track memory usage before execution
+        memory_before = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+        start_time = time.time()
         
         def target_wrapper():
             try:
+                # Set thread name for easier debugging
+                threading.current_thread().name = f"Analysis-{item_id}"
                 result_container[0] = func(*args_tuple)
             except Exception as e:
                 # Capture any exception from the target function
                 error_container[0] = e
+                self.logger.error(f"Error in analysis thread for item {item_id}: {e}", exc_info=True)
             finally:
                 completed_event.set()
         
         worker_thread = threading.Thread(target=target_wrapper)
         worker_thread.daemon = True  # Allow main program to exit even if thread is running
+        
+        # Store thread for potential cleanup
+        self.running_threads[thread_id] = {
+            'thread': worker_thread,
+            'item_id': item_id,
+            'start_time': start_time
+        }
+        
         worker_thread.start()
         
-        if completed_event.wait(timeout=timeout_seconds):
+        # Wait for completion with timeout
+        completed = completed_event.wait(timeout=timeout_seconds)
+        
+        # Calculate execution metrics
+        execution_time = time.time() - start_time
+        memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+        memory_delta = memory_after - memory_before
+        
+        # Clean up thread tracking
+        if thread_id in self.running_threads:
+            del self.running_threads[thread_id]
+        
+        if completed:
+            self.logger.info(f"Analysis for item {item_id} completed in {execution_time:.2f}s (memory: {memory_delta:.2f}MB)")
+            
             if error_container[0] is not None:
                 # Return an error dictionary if the function raised an exception
-                return {"error": f"Analysis failed: {str(error_container[0])}"}
+                error_msg = f"Analysis failed: {str(error_container[0])}"
+                self.logger.error(f"Analysis error for item {item_id}: {error_msg}")
+                return {"error": error_msg, "execution_time": execution_time, "memory_delta": memory_delta}
             
             return result_container[0]  # Return the actual result
         else:
-            # Timeout occurred
-            self.logger.error(f"Analysis thread timed out after {timeout_seconds} seconds")
-            return {"error": f"Analysis thread timed out after {timeout_seconds} seconds"}
+            # Timeout occurred - log detailed information
+            self.logger.error(f"Analysis thread timed out after {timeout_seconds} seconds for item {item_id}")
+            
+            # Try to get thread stack trace for debugging
+            try:
+                import traceback
+                import sys
+                frame = sys._current_frames().get(worker_thread.ident)
+                if frame:
+                    stack_trace = ''.join(traceback.format_stack(frame))
+                    self.logger.error(f"Thread stack trace at timeout for item {item_id}:\n{stack_trace}")
+            except Exception as e:
+                self.logger.error(f"Failed to get thread stack trace: {e}")
+            
+            # Attempt to terminate any child processes that might be running
+            try:
+                self._terminate_child_processes()
+            except Exception as e:
+                self.logger.error(f"Error terminating child processes: {e}")
+            
+            return {
+                "error": f"Analysis thread timed out after {timeout_seconds} seconds for item {item_id}",
+                "execution_time": execution_time,
+                "memory_delta": memory_delta
+            }
+    
+    def _terminate_child_processes(self):
+        """
+        Attempt to find and terminate any child processes that might be causing hangs
+        """
+        current_process = psutil.Process()
+        
+        # Get all child processes
+        children = current_process.children(recursive=True)
+        
+        for child in children:
+            try:
+                # Check if it's a semgrep process
+                if 'semgrep' in child.name().lower() or 'python' in child.name().lower():
+                    self.logger.warning(f"Terminating potentially hung child process: {child.pid} ({child.name()})")
+                    
+                    # Try graceful termination first
+                    child.terminate()
+                    
+                    # Wait briefly for termination
+                    gone, still_alive = psutil.wait_procs([child], timeout=2)
+                    
+                    # If still alive, force kill
+                    if still_alive:
+                        self.logger.warning(f"Force killing process {child.pid} that didn't terminate gracefully")
+                        child.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                self.logger.warning(f"Error terminating process: {e}")

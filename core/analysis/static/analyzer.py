@@ -9,16 +9,33 @@ class StaticAnalyzerError(Exception):
     pass
 
 class StaticAnalyzer:
-    def __init__(self, rules_path: str = "rules/semgrep"):
+    def __init__(self, rules_path: str = "rules/semgrep", config: Optional[Dict[str, Any]] = None):
         print(f"StaticAnalyzer initialized with rules_path: {rules_path}")
         self.rules_path = rules_path
         self.rule_manager = RuleManager(rules_path)
         # Add Semgrep registry rulesets for gitleaks and OWASP Top Ten
         self.registry_rulesets = ["p/gitleaks", "p/owasp-top-ten"]
-        self.semgrep_runner = SemgrepRunner(rules_path, registry_rulesets=self.registry_rulesets)
+        
+        # Default configuration
+        self.config = config or {}
+        self.max_content_size = self.config.get("max_content_size", 1024 * 1024)  # 1MB default
+        self.max_content_lines = self.config.get("max_content_lines", 10000)  # 10K lines default
+        
+        # Initialize semgrep runner with configuration
+        self.semgrep_runner = SemgrepRunner(
+            rules_path,
+            config={"max_content_size": self.max_content_size},
+            registry_rulesets=self.registry_rulesets
+        )
         self.finding_manager = FindingManager()
 
     def analyze(self, data: Any, language: Optional[str] = None) -> List[Dict[str, Any]]:
+        import time
+        import psutil
+        
+        start_time = time.time()
+        memory_before = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+        
         try:
             findings: List[Dict[str, Any]] = []
 
@@ -28,6 +45,21 @@ class StaticAnalyzer:
                 lang_for_scan = data.get('language', language)
 
                 item_id = data.get('id', 'unknown') # For logging
+                
+                # Log memory usage and content size for monitoring
+                content_size = len(content_to_scan) if content_to_scan else 0
+                content_lines = content_to_scan.count('\n') + 1 if content_to_scan else 0
+                print(f"Item {item_id}: Content size: {content_size} bytes, {content_lines} lines")
+
+                # Check content size before processing
+                if content_to_scan and content_size > self.max_content_size:
+                    print(f"WARNING: Item {item_id}: Content size ({content_size} bytes) exceeds maximum allowed size ({self.max_content_size} bytes)")
+                    return [self._create_size_limit_finding(item_id, content_size, self.max_content_size)]
+                
+                # Check line count before processing
+                if content_to_scan and content_lines > self.max_content_lines:
+                    print(f"WARNING: Item {item_id}: Content line count ({content_lines}) exceeds maximum allowed lines ({self.max_content_lines})")
+                    return [self._create_line_limit_finding(item_id, content_lines, self.max_content_lines)]
 
                 if content_to_scan and lang_for_scan:
                     # Check if the language is supported by semgrep
@@ -54,12 +86,23 @@ class StaticAnalyzer:
                         print(f"Language '{lang_for_scan}' not supported by semgrep, using 'generic' instead. ID: {item_id}")
                         effective_language = 'generic'
                     
-                    print(f"Static analyzing in-memory content (lang: {effective_language}). ID: {item_id}")
-                    findings = self.semgrep_runner.run(content=content_to_scan, language=effective_language)
+                    # For generic content, check complexity before running semgrep
+                    if effective_language == 'generic' and self._is_complex_generic_content(content_to_scan):
+                        print(f"WARNING: Item {item_id}: Complex generic content detected, using alternative analysis")
+                        findings = self._analyze_complex_generic_content(content_to_scan, item_id)
+                    else:
+                        print(f"Static analyzing in-memory content (lang: {effective_language}). ID: {item_id}")
+                        findings = self.semgrep_runner.run(content=content_to_scan, language=effective_language)
                 elif content_to_scan and not lang_for_scan:
                     # Default to generic for content without a specified language
                     print(f"No language specified for content analysis, using 'generic'. ID: {item_id}")
-                    findings = self.semgrep_runner.run(content=content_to_scan, language='generic')
+                    
+                    # Check complexity before running semgrep
+                    if self._is_complex_generic_content(content_to_scan):
+                        print(f"WARNING: Item {item_id}: Complex generic content detected, using alternative analysis")
+                        findings = self._analyze_complex_generic_content(content_to_scan, item_id)
+                    else:
+                        findings = self.semgrep_runner.run(content=content_to_scan, language='generic')
                 elif not content_to_scan:
                     raise StaticAnalyzerError(
                         f"Input dictionary for analysis is missing 'content' key. ID: {item_id}"
@@ -83,6 +126,13 @@ class StaticAnalyzer:
             for finding in findings:
                 self.finding_manager.store_finding(finding)
             
+            # Log execution metrics
+            execution_time = time.time() - start_time
+            memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+            memory_used = memory_after - memory_before
+            
+            print(f"Static analysis completed in {execution_time:.2f}s, memory delta: {memory_used:.2f}MB")
+            
             # As per original logic, return all findings managed by finding_manager.
             # If only findings from *this* run were needed, one would return the `findings` list directly.
             return self.finding_manager.get_all_findings()
@@ -90,16 +140,174 @@ class StaticAnalyzer:
             # Log more specific error to help diagnose
             error_type = type(e).__name__
             print(f"Error during static analysis pipeline ({error_type}): {e}")
-            raise StaticAnalyzerError(f"Static analysis failed due to {error_type}: {e}")
+            
+            # Log execution metrics even on error
+            execution_time = time.time() - start_time
+            memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+            memory_used = memory_after - memory_before
+            
+            print(f"Static analysis failed after {execution_time:.2f}s, memory delta: {memory_used:.2f}MB")
+            
+            # Create an error finding instead of raising exception
+            item_id = data.get('id', 'unknown') if isinstance(data, dict) else 'unknown'
+            error_finding = {
+                "rule_id": f"static_analysis_error_{error_type.lower()}",
+                "path": item_id,
+                "start": {"line": 1, "col": 1},
+                "end": {"line": 1, "col": 1},
+                "extra": {"message": f"Static analysis error: {str(e)}", "execution_time": execution_time},
+                "category": "Error",
+                "priority": "Medium"
+            }
+            self.finding_manager.store_finding(error_finding)
+            return [error_finding]
         except Exception as e:  # Catch any other unexpected errors
             error_type = type(e).__name__
-            # Consider logging the stack trace here for better debugging in a real system
-            # import traceback; traceback.print_exc();
+            # Log stack trace for better debugging
+            import traceback
             print(f"Unexpected error during static analysis ({error_type}): {e}")
-            raise StaticAnalyzerError(f"An unexpected error ({error_type}) occurred during static analysis: {e}")
+            traceback.print_exc()
+            
+            # Log execution metrics even on error
+            execution_time = time.time() - start_time
+            memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+            memory_used = memory_after - memory_before
+            
+            print(f"Static analysis failed after {execution_time:.2f}s, memory delta: {memory_used:.2f}MB")
+            
+            # Create an error finding instead of raising exception
+            item_id = data.get('id', 'unknown') if isinstance(data, dict) else 'unknown'
+            error_finding = {
+                "rule_id": "static_analysis_unexpected_error",
+                "path": item_id,
+                "start": {"line": 1, "col": 1},
+                "end": {"line": 1, "col": 1},
+                "extra": {"message": f"Unexpected error: {str(e)}", "execution_time": execution_time},
+                "category": "Error",
+                "priority": "High"
+            }
+            self.finding_manager.store_finding(error_finding)
+            return [error_finding]
 
     def list_rules(self) -> List[Dict[str, Any]]:
         return self.semgrep_runner.list_rules()
 
     def clear_findings(self):
         self.finding_manager.clear()
+        
+    def _is_complex_generic_content(self, content: str) -> bool:
+        """
+        Determine if generic content is too complex for semgrep analysis
+        """
+        # Check content size
+        if len(content) > 100000:  # 100KB
+            return True
+            
+        # Check line count
+        if content.count('\n') > 1000:  # More than 1000 lines
+            return True
+            
+        # Check for complex patterns that might cause semgrep to hang
+        complex_patterns = [
+            r'```',  # Code blocks in markdown
+            r'\[\[',  # Wiki-style links
+            r'\{\{',  # Template syntax
+        ]
+        
+        for pattern in complex_patterns:
+            if content.count(pattern) > 10:  # More than 10 occurrences
+                return True
+                
+        return False
+        
+    def _analyze_complex_generic_content(self, content: str, item_id: str) -> List[Dict[str, Any]]:
+        """
+        Alternative analysis for complex generic content that would timeout with semgrep
+        """
+        import re
+        
+        findings = []
+        
+        # Simple pattern matching for common issues in markdown/generic content
+        patterns = [
+            (r'(https?:\/\/[^\s]+)', "url_found", "URL detected in content", "Info"),
+            (r'(password|api[_\s]?key|secret|token)[=:]\s*[\'"][^\'"]+[\'"]', "potential_secret", "Potential hardcoded secret", "High"),
+            (r'(eval\(|exec\(|system\()', "dangerous_function", "Potentially dangerous function call", "High"),
+            (r'(DROP\s+TABLE|DELETE\s+FROM|UPDATE\s+.*\s+SET)', "sql_command", "SQL command detected", "Medium"),
+            (r'<script[^>]*>.*?<\/script>', "script_tag", "Script tag detected", "Medium"),
+        ]
+        
+        for pattern, rule_id, message, priority in patterns:
+            for match in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE | re.DOTALL):
+                start_pos = match.start()
+                end_pos = match.end()
+                
+                # Calculate line and column numbers
+                line_start = content[:start_pos].count('\n') + 1
+                line_end = content[:end_pos].count('\n') + 1
+                
+                # Calculate column positions
+                if line_start == line_end:
+                    col_start = start_pos - content[:start_pos].rfind('\n') if '\n' in content[:start_pos] else start_pos + 1
+                    col_end = end_pos - content[:end_pos].rfind('\n') if '\n' in content[:end_pos] else end_pos + 1
+                else:
+                    col_start = start_pos - content[:start_pos].rfind('\n') if '\n' in content[:start_pos] else start_pos + 1
+                    col_end = end_pos - content[:end_pos].rfind('\n') if '\n' in content[:end_pos] else end_pos + 1
+                
+                findings.append({
+                    "rule_id": rule_id,
+                    "path": f"item-{item_id}",
+                    "start": {"line": line_start, "col": col_start},
+                    "end": {"line": line_end, "col": col_end},
+                    "extra": {
+                        "message": message,
+                        "matched_text": match.group(0)[:100] + ("..." if len(match.group(0)) > 100 else "")
+                    },
+                    "category": "ContentScan",
+                    "priority": priority
+                })
+        
+        # Add a note that alternative analysis was used
+        findings.append({
+            "rule_id": "alternative_analysis_used",
+            "path": f"item-{item_id}",
+            "start": {"line": 1, "col": 1},
+            "end": {"line": 1, "col": 1},
+            "extra": {"message": "Complex generic content analyzed with alternative method instead of semgrep"},
+            "category": "Info",
+            "priority": "Low"
+        })
+        
+        return findings
+        
+    def _create_size_limit_finding(self, item_id: str, content_size: int, max_size: int) -> Dict[str, Any]:
+        """Create a finding for content that exceeds size limits"""
+        return {
+            "rule_id": "content_size_limit_exceeded",
+            "path": f"item-{item_id}",
+            "start": {"line": 1, "col": 1},
+            "end": {"line": 1, "col": 1},
+            "extra": {
+                "message": f"Content size ({content_size} bytes) exceeds maximum allowed size ({max_size} bytes)",
+                "content_size": content_size,
+                "max_size": max_size
+            },
+            "category": "Performance",
+            "priority": "Medium"
+        }
+        
+    def _create_line_limit_finding(self, item_id: str, line_count: int, max_lines: int) -> Dict[str, Any]:
+        """Create a finding for content that exceeds line count limits"""
+        return {
+            "rule_id": "content_line_limit_exceeded",
+            "path": f"item-{item_id}",
+            "start": {"line": 1, "col": 1},
+            "end": {"line": 1, "col": 1},
+            "extra": {
+                "message": f"Content line count ({line_count}) exceeds maximum allowed lines ({max_lines})",
+                "line_count": line_count,
+                "max_lines": max_lines
+            },
+            "category": "Performance",
+            "priority": "Medium"
+        }
