@@ -4,8 +4,8 @@ import hashlib
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql import func # for func.now()
 
-from core.database.connector import DatabaseConnector
-from core.database.schema import Urls, ProcessedMarkdownContent, CodeBlock, ExtractedItems
+from ..database.connector import DatabaseConnector
+from ..database.schema import Urls, ProcessedMarkdownContent, CodeBlock, ExtractedItems
 
 class ContentStorageError(Exception):
     """Custom exception for content storage errors."""
@@ -225,7 +225,7 @@ class ContentStorage:
 
 # Example Usage (Illustrative - would be in a higher-level orchestrator)
 # if __name__ == '__main__':
-#     from core.content.markdown_parser import MarkdownParser
+#     from .markdown_parser import MarkdownParser
 #
 #     # Setup (replace with actual project setup)
 #     db_conn = DatabaseConnector(db_config="sqlite:///./test_content_storage.db", echo=True)

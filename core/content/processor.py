@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 
-from core.database.connector import DatabaseConnector
+from ..database.connector import DatabaseConnector
 from .retriever import batch_retrieve, ContentRetrievalError
 from .markdown_parser import MarkdownParser, MarkdownParseError
 from .storage import ContentStorage, ContentStorageError

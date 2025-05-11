@@ -9,17 +9,45 @@ import time
 import logging
 import threading
 import concurrent.futures
-from core.database.connector import DatabaseConnector
-from core.content.retriever import ContentRetriever
-from core.content.processor import ContentProcessor
-from core.analysis.markdown.analyzer import MarkdownAnalyzer
-from core.analysis.patterns.analyzer import PatternAnalyzer
-from core.analysis.secrets.analyzer import SecretsAnalyzer
-from core.analysis.static.analyzer import StaticAnalyzer
-from core.scoring.scoring_model import ScoringModel
-from core.scoring.risk_assessor import RiskAssessor
-from core.reporting.reporting_manager import ReportingManager
-from core.ml.integration import MLAnalysis
+import os
+import sys
+
+# Add the parent directory to sys.path if running the script directly
+if __name__ == "__main__":
+    # Get the absolute path of the current script
+    script_path = os.path.abspath(__file__)
+    # Get the directory containing the script
+    script_dir = os.path.dirname(script_path)
+    # Get the parent directory of the script directory
+    parent_dir = os.path.dirname(script_dir)
+    # Add the parent directory to sys.path if it's not already there
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    # Use absolute imports
+    from core.database.connector import DatabaseConnector
+    from core.content.retriever import ContentRetriever
+    from core.content.processor import ContentProcessor
+    from core.analysis.markdown.analyzer import MarkdownAnalyzer
+    from core.analysis.patterns.analyzer import PatternAnalyzer
+    from core.analysis.secrets.analyzer import SecretsAnalyzer
+    from core.analysis.static.analyzer import StaticAnalyzer
+    from core.scoring.scoring_model import ScoringModel
+    from core.scoring.risk_assessor import RiskAssessor
+    from core.reporting.reporting_manager import ReportingManager
+    from core.ml.integration import MLAnalysis
+else:
+    # Use relative imports when imported as a module
+    from .database.connector import DatabaseConnector
+    from .content.retriever import ContentRetriever
+    from .content.processor import ContentProcessor
+    from .analysis.markdown.analyzer import MarkdownAnalyzer
+    from .analysis.patterns.analyzer import PatternAnalyzer
+    from .analysis.secrets.analyzer import SecretsAnalyzer
+    from .analysis.static.analyzer import StaticAnalyzer
+    from .scoring.scoring_model import ScoringModel
+    from .scoring.risk_assessor import RiskAssessor
+    from .reporting.reporting_manager import ReportingManager
+    from .ml.integration import MLAnalysis
 
 class Pipeline:
     def __init__(self, config=None):
@@ -36,7 +64,10 @@ class Pipeline:
         self.reporting_manager = ReportingManager()
         
         # Initialize temporal analysis components
-        from core.temporal.integration import TemporalAnalysis
+        if __name__ == "__main__":
+            from core.temporal.integration import TemporalAnalysis
+        else:
+            from .temporal.integration import TemporalAnalysis
         self.temporal_analyzer = TemporalAnalysis(self.db)
         
         # Initialize ML analysis components
