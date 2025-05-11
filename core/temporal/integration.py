@@ -104,32 +104,31 @@ class TemporalAnalysis:
         
         return results
     
-    def track_analysis_result(self, url: str, analysis_result: SecurityAnalysisResult) -> Dict[str, Any]:
+    def track_analysis_result(self, url: str, analysis_result: SecurityAnalysisResult, session=None) -> Dict[str, Any]:
         """
         Track a security analysis result for historical analysis.
         
         Args:
             url: The URL
             analysis_result: Security analysis result
+            session: Optional SQLAlchemy session to use (for batch operations)
             
         Returns:
             Dictionary with tracking information
         """
         # Get the latest version for this URL
-        with self._db_connector.session_scope() as session:
-            from core.database.schema import Urls
-            from core.temporal.schema import ContentVersion
-            from sqlalchemy import desc
+        url_record = None
+        version_id = None
+        
+        # Use provided session or create a new one
+        if session is None:
+            with self._db_connector.session_scope() as new_session:
+                url_record, version_id = self._get_url_and_version(new_session, url)
+        else:
+            url_record, version_id = self._get_url_and_version(session, url)
             
-            url_record = session.query(Urls).filter_by(url_string=url).first()
-            if not url_record:
-                return {'error': 'URL not found'}
-            
-            latest_version = session.query(ContentVersion).filter_by(
-                url_id=url_record.id
-            ).order_by(desc(ContentVersion.version_number)).first()
-            
-            version_id = latest_version.id if latest_version else None
+        if not url_record:
+            return {'error': 'URL not found'}
         
         # Track risk score
         try:
@@ -143,9 +142,15 @@ class TemporalAnalysis:
                 malicious_confidence=analysis_result.malicious_confidence
             )
             
-            with self._db_connector.session_scope() as session:
+            # Use provided session or create a new one
+            if session is None:
+                with self._db_connector.session_scope() as new_session:
+                    new_session.add(risk_score)
+                    new_session.commit()
+            else:
                 session.add(risk_score)
-                session.commit()
+                # Don't commit here when using an external session
+                # The caller is responsible for committing
             
             return {
                 'url': url,
@@ -157,6 +162,32 @@ class TemporalAnalysis:
             }
         except Exception as e:
             return {'error': f'Failed to track analysis result: {str(e)}'}
+    
+    def _get_url_and_version(self, session, url: str):
+        """
+        Helper method to get URL record and latest version ID.
+        
+        Args:
+            session: SQLAlchemy session
+            url: The URL string
+            
+        Returns:
+            Tuple of (url_record, version_id)
+        """
+        from core.database.schema import Urls
+        from core.temporal.schema import ContentVersion
+        from sqlalchemy import desc
+        
+        url_record = session.query(Urls).filter_by(url_string=url).first()
+        if not url_record:
+            return None, None
+        
+        latest_version = session.query(ContentVersion).filter_by(
+            url_id=url_record.id
+        ).order_by(desc(ContentVersion.version_number)).first()
+        
+        version_id = latest_version.id if latest_version else None
+        return url_record, version_id
     
     def get_version_history(self, url: str) -> List[Dict[str, Any]]:
         """

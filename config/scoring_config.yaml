@@ -31,3 +31,8 @@ category_keywords:
     - documentation
     - overview
     - introduction
+
+# Logging configuration
+logging:
+  level: "INFO"
+  file: "logs/main.log"

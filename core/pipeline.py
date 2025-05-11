@@ -51,10 +51,32 @@ else:
 
 class Pipeline:
     def __init__(self, config=None):
+        # Initialize logger first
+        self.logger = logging.getLogger("Pipeline")
+        self.performance = {}
+        
         self.config = config or {}
+        
+        # Configure database with optimized settings
+        db_config = self.config.get("db", {})
+        if isinstance(db_config, dict) and "path" in db_config:
+            # Ensure WAL mode is enabled
+            self.logger.info(f"Initializing database with path: {db_config['path']}")
+        else:
+            self.logger.info("Initializing database with default settings")
+        
+        # Initialize database connector
         self.db = DatabaseConnector(self.config.get("db"))
+        
+        # Check database connection
+        if not self.db.check_connection():
+            self.logger.error("Failed to establish database connection")
+        
+        # Initialize components with database dependency
         self.content_retriever = ContentRetriever(self.db)
         self.content_processor = ContentProcessor(self.db)
+        
+        # Initialize analyzers (no direct DB dependency)
         self.markdown_analyzer = MarkdownAnalyzer()
         self.pattern_analyzer = PatternAnalyzer()
         self.secrets_analyzer = SecretsAnalyzer()
@@ -73,9 +95,42 @@ class Pipeline:
         # Initialize ML analysis components
         self.ml_analyzer = MLAnalysis(self.config.get("ml"), self.db)
         
-        self.logger = logging.getLogger("Pipeline")
-        self.performance = {}
+        # Initialize monitoring components
+        self._init_monitoring()
 
+    def _init_monitoring(self):
+        """Initialize monitoring components for semgrep process tracking"""
+        try:
+            # Initialize metrics collector if not already done
+            from core.monitoring.metrics_collector import MetricsCollector
+            db_url = str(self.db.engine.url)
+            db_path = db_url.replace('sqlite:///', '')
+            
+            # Configure metrics collector with longer intervals to reduce DB contention
+            self.metrics_collector = MetricsCollector({
+                "db_path": db_path,
+                "collection_interval": 60,  # Increased from 30 to 60 seconds
+                "retention_days": 14        # Reduced from 30 to 14 days to minimize DB size
+            })
+            
+            # Initialize alert manager if not already done
+            from core.monitoring.alert_manager import AlertManager
+            self.alert_manager = AlertManager({"db_path": db_path})
+            
+            # Add semgrep resource alerts
+            # Set thresholds: max 3 semgrep processes and max 8% memory usage
+            self.alert_manager.add_semgrep_resource_alert(max_processes=3, max_memory_percent=8.0)
+            
+            # Start monitoring in background with increased intervals
+            self.metrics_collector.start_collection(interval=60)  # Check every 60 seconds (was 30)
+            self.alert_manager.start_monitoring(interval=120)     # Check alerts every 120 seconds (was 60)
+            
+            self.logger.info("Semgrep process monitoring initialized with optimized intervals")
+        except ImportError as e:
+            self.logger.warning(f"Could not initialize monitoring components: {e}")
+        except Exception as e:
+            self.logger.error(f"Error initializing monitoring components: {e}")
+    
     def run(self, content_query=None):
         """
         Orchestrates the full pipeline:
@@ -123,35 +178,47 @@ class Pipeline:
                 # Decide if pipeline can continue with partially processed items or should stop
                 raise
 
-            # 3. Run analyzers (Parallelized)
+            # 3. Run analyzers (Parallelized with reduced concurrency)
             t0 = time.time()
             try:
                 analysis_results = [{} for _ in processed_items] # Initialize with empty dicts
-                # Max workers can be configured, e.g., based on CPU cores or config file
-                # Using a default of 4 workers for demonstration
-                max_workers = self.config.get("pipeline_workers", 4)
+                
+                # Reduce max workers to decrease database contention
+                # Default was 4, now using 2 or configurable
+                max_workers = min(self.config.get("pipeline_workers", 2), 2)
+                self.logger.info(f"Running analysis with {max_workers} worker threads")
+                
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_item_idx = {}
-                    for i, item in enumerate(processed_items):
-                        # Use thread-level timeout wrapper with 180 seconds timeout
-                        future_to_item_idx[executor.submit(self._execute_with_thread_timeout,
-                                                          self._analyze_item,
-                                                          (item,),
-                                                          180)] = i
-
-                    for future in concurrent.futures.as_completed(future_to_item_idx):
-                        item_idx = future_to_item_idx[future]
-                        try:
-                            result = future.result()
-                            # Check if result is an error dictionary from the timeout wrapper
-                            if isinstance(result, dict) and "error" in result:
-                                self.logger.error(f"Analysis for item {item_idx} failed: {result['error']}")
-                                analysis_results[item_idx] = result
-                            else:
-                                analysis_results[item_idx] = result
-                        except Exception as exc:
-                            self.logger.error(f"Analysis for item {item_idx} generated an exception: {exc}", exc_info=True)
-                            analysis_results[item_idx] = {"error": str(exc)} # Store error info
+                    
+                    # Process items in batches to reduce concurrent DB access
+                    batch_size = 2
+                    for batch_start in range(0, len(processed_items), batch_size):
+                        batch_end = min(batch_start + batch_size, len(processed_items))
+                        batch_items = processed_items[batch_start:batch_end]
+                        
+                        # Submit batch for processing
+                        for i, item in enumerate(batch_items, batch_start):
+                            # Use thread-level timeout wrapper with 180 seconds timeout
+                            future_to_item_idx[executor.submit(self._execute_with_thread_timeout,
+                                                              self._analyze_item,
+                                                              (item,),
+                                                              180)] = i
+                        
+                        # Wait for batch to complete before starting next batch
+                        for future in concurrent.futures.as_completed(list(future_to_item_idx.keys())[-len(batch_items):]):
+                            item_idx = future_to_item_idx[future]
+                            try:
+                                result = future.result()
+                                # Check if result is an error dictionary from the timeout wrapper
+                                if isinstance(result, dict) and "error" in result:
+                                    self.logger.error(f"Analysis for item {item_idx} failed: {result['error']}")
+                                    analysis_results[item_idx] = result
+                                else:
+                                    analysis_results[item_idx] = result
+                            except Exception as exc:
+                                self.logger.error(f"Analysis for item {item_idx} generated an exception: {exc}", exc_info=True)
+                                analysis_results[item_idx] = {"error": str(exc)} # Store error info
                 self.performance['analysis'] = time.time() - t0
                 self.logger.info("Analysis stage completed.")
             except Exception as e:
@@ -193,26 +260,39 @@ class Pipeline:
                 ml_results = {"error": str(e)}
                 # Continue with pipeline even if ML analysis fails
             
-            # 6. Temporal Analysis
+            # 6. Temporal Analysis (with optimized DB access)
             t0 = time.time()
             try:
                 temporal_results = []
-                for i, item in enumerate(content_items):
-                    if i < len(valid_analysis_results) and i < len(scores) and i < len(risks):
-                        # Process content for temporal analysis
-                        url = item.get('url', '')
-                        content = item.get('raw_content', '')
-                        processed_id = item.get('processed_id')
-                        
-                        # Track version and detect changes
-                        temporal_result = self.temporal_analyzer.process_content(url, content, processed_id)
-                        
-                        # Track analysis result for historical analysis
-                        if i < len(scores):
-                            analysis_result = valid_analysis_results[i]
-                            self.temporal_analyzer.track_analysis_result(url, analysis_result)
-                        
-                        temporal_results.append(temporal_result)
+                
+                # Process in smaller batches to reduce DB contention
+                batch_size = 5
+                for batch_start in range(0, len(content_items), batch_size):
+                    batch_end = min(batch_start + batch_size, len(content_items))
+                    batch_items = content_items[batch_start:batch_end]
+                    batch_results = []
+                    
+                    for i, item in enumerate(batch_items, batch_start):
+                        if i < len(valid_analysis_results) and i < len(scores) and i < len(risks):
+                            # Process content for temporal analysis
+                            url = item.get('url', '')
+                            content = item.get('raw_content', '')
+                            processed_id = item.get('processed_id')
+                            
+                            # Track version and detect changes
+                            temporal_result = self.temporal_analyzer.process_content(url, content, processed_id)
+                            batch_results.append((i, url, temporal_result, valid_analysis_results[i]))
+                    
+                    # Batch update analysis results to reduce DB operations
+                    with self.db.session_scope() as session:
+                        for i, url, temporal_result, analysis_result in batch_results:
+                            # Track analysis result for historical analysis
+                            self.temporal_analyzer.track_analysis_result(url, analysis_result, session=session)
+                            temporal_results.append(temporal_result)
+                    
+                    # Small delay between batches to allow other processes to access DB
+                    if batch_end < len(content_items):
+                        time.sleep(0.1)
                 
                 self.performance['temporal_analysis'] = time.time() - t0
                 self.logger.info("Temporal analysis completed.")

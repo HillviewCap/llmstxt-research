@@ -490,9 +490,29 @@ class AlertManager:
         try:
             # Get log configuration
             log_level = config.get("level", "warning").upper()
+            log_file = config.get("file", "alerts.log")
             
-            # Get logger
+            # Configure file handler if not already configured
             alert_logger = logging.getLogger("AlertNotification")
+            
+            # Check if we need to add a file handler
+            has_file_handler = False
+            for handler in alert_logger.handlers:
+                if isinstance(handler, logging.FileHandler) and handler.baseFilename.endswith(log_file):
+                    has_file_handler = True
+                    break
+            
+            if not has_file_handler and log_file:
+                # Create directory if it doesn't exist
+                log_dir = os.path.dirname(log_file)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+                
+                # Add file handler
+                file_handler = logging.FileHandler(log_file)
+                file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+                alert_logger.addHandler(file_handler)
+                alert_logger.info("Alert logging enabled. Writing to " + log_file)
             
             # Log alert
             log_message = f"ALERT [{alert['severity'].upper()}]: {alert['alert_name']} - {alert['message']}"
@@ -622,6 +642,60 @@ class AlertManager:
             logger.error(f"Error retrieving active alerts from database: {e}")
         
         return alerts
+    
+    def add_semgrep_resource_alert(self, max_processes=5, max_memory_percent=10.0):
+        """
+        Add a predefined alert rule for semgrep resource usage.
+        
+        This creates an alert rule that triggers when semgrep processes
+        are consuming too many resources or not being properly terminated.
+        
+        Args:
+            max_processes: Maximum number of semgrep processes allowed
+            max_memory_percent: Maximum memory percentage allowed for semgrep processes
+        """
+        # Create alert rule for semgrep processes
+        semgrep_process_rule = {
+            "id": "semgrep-process-count",
+            "name": "Semgrep Process Count Alert",
+            "type": "metric",
+            "severity": "high",
+            "conditions": [
+                {
+                    "metric_type": "process",
+                    "metric_name": "semgrep_process_count",
+                    "operator": ">",
+                    "threshold": max_processes
+                }
+            ]
+        }
+        
+        # Create alert rule for semgrep memory usage
+        semgrep_memory_rule = {
+            "id": "semgrep-memory-usage",
+            "name": "Semgrep Memory Usage Alert",
+            "type": "metric",
+            "severity": "high",
+            "conditions": [
+                {
+                    "metric_type": "process",
+                    "metric_name": "semgrep_memory_percent",
+                    "operator": ">",
+                    "threshold": max_memory_percent
+                }
+            ]
+        }
+        
+        # Add rules if they don't already exist
+        existing_rule_ids = [rule.get("id") for rule in self.alert_rules]
+        
+        if "semgrep-process-count" not in existing_rule_ids:
+            self.alert_rules.append(semgrep_process_rule)
+            logger.info(f"Added semgrep process count alert rule (max: {max_processes})")
+        
+        if "semgrep-memory-usage" not in existing_rule_ids:
+            self.alert_rules.append(semgrep_memory_rule)
+            logger.info(f"Added semgrep memory usage alert rule (max: {max_memory_percent}%)")
     
     def start_monitoring(self, interval: Optional[int] = None):
         """

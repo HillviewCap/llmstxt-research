@@ -27,14 +27,14 @@ def setup_logging(config):
         # Ensure log directory exists
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         logging.basicConfig(level=numeric_level, format=log_format,
-                           filename=log_file, filemode='a')
+                           filename=log_file, filemode='a', force=True)
         # Also log to console
         console = logging.StreamHandler()
         console.setLevel(numeric_level)
         console.setFormatter(logging.Formatter(log_format))
         logging.getLogger('').addHandler(console)
     else:
-        logging.basicConfig(level=numeric_level, format=log_format)
+        logging.basicConfig(level=numeric_level, format=log_format, force=True)
     
     logging.info(f"Logging initialized at level {log_level}")
 

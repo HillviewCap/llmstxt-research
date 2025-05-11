@@ -4,7 +4,13 @@ import os
 import signal
 import tempfile
 import shutil
-from typing import List, Dict, Any, Optional
+import time
+import logging
+import psutil
+from typing import List, Dict, Any, Optional, Tuple
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 class SemgrepRunnerError(Exception):
     pass
@@ -181,8 +187,120 @@ class SemgrepRunner:
             for rule_id, meta in self.rule_metadata.items()
         ]
         
+    def _get_process_resource_usage(self, pid):
+        """Get memory and CPU usage for a process and its children"""
+        try:
+            process = psutil.Process(pid)
+            children = process.children(recursive=True)
+            
+            # Get main process info
+            main_process_info = {
+                'pid': pid,
+                'memory_percent': process.memory_percent(),
+                'cpu_percent': process.cpu_percent(interval=0.1),
+                'status': process.status()
+            }
+            
+            # Get children info
+            children_info = []
+            for child in children:
+                try:
+                    children_info.append({
+                        'pid': child.pid,
+                        'memory_percent': child.memory_percent(),
+                        'cpu_percent': child.cpu_percent(interval=0.1),
+                        'status': child.status()
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass  # Child process may have terminated
+            
+            return {
+                'main': main_process_info,
+                'children': children_info,
+                'total_processes': 1 + len(children)
+            }
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return {'error': f"Could not access process {pid}"}
+    
+    def _verify_process_termination(self, pid):
+        """Verify that a process and all its children are terminated"""
+        try:
+            process = psutil.Process(pid)
+            children = process.children(recursive=True)
+            
+            # If we can get the process, it's still running
+            running_processes = [pid]
+            for child in children:
+                running_processes.append(child.pid)
+                
+            return False, running_processes
+        except psutil.NoSuchProcess:
+            # Process is gone, which is what we want
+            return True, []
+    
+    def _terminate_process_group_with_verification(self, pid, max_attempts=3):
+        """
+        Terminate a process group with multiple attempts and verification
+        Returns a tuple of (success, remaining_pids)
+        """
+        logger.info(f"Attempting to terminate process group with PID {pid}")
+        
+        # First, log the process tree before termination
+        resource_info = self._get_process_resource_usage(pid)
+        logger.info(f"Process tree before termination: {resource_info}")
+        
+        # Try to terminate the process group with increasing force
+        for attempt in range(max_attempts):
+            try:
+                if attempt == 0:
+                    # First attempt: SIGTERM
+                    logger.info(f"Sending SIGTERM to process group {pid} (attempt {attempt+1}/{max_attempts})")
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                else:
+                    # Subsequent attempts: SIGKILL
+                    logger.info(f"Sending SIGKILL to process group {pid} (attempt {attempt+1}/{max_attempts})")
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                
+                # Wait a bit for processes to terminate
+                wait_time = 2 * (attempt + 1)  # Increase wait time with each attempt
+                logger.info(f"Waiting {wait_time} seconds for processes to terminate")
+                time.sleep(wait_time)
+                
+                # Verify termination
+                terminated, remaining_pids = self._verify_process_termination(pid)
+                if terminated:
+                    logger.info(f"Process group {pid} successfully terminated on attempt {attempt+1}")
+                    return True, []
+                else:
+                    logger.warning(f"Process group {pid} still has running processes after attempt {attempt+1}: {remaining_pids}")
+                    
+                    # For remaining processes, try to kill them individually
+                    if attempt > 0:  # Only on second+ attempts
+                        for remaining_pid in remaining_pids:
+                            try:
+                                logger.info(f"Attempting to kill individual process {remaining_pid}")
+                                os.kill(remaining_pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass  # Process already gone
+            
+            except ProcessLookupError:
+                # Process group already gone
+                logger.info(f"Process group {pid} already terminated")
+                return True, []
+        
+        # Final verification
+        terminated, remaining_pids = self._verify_process_termination(pid)
+        if terminated:
+            return True, []
+        else:
+            logger.error(f"Failed to terminate all processes in group {pid} after {max_attempts} attempts. Remaining PIDs: {remaining_pids}")
+            return False, remaining_pids
+    
     def run_with_process_group_timeout(self, cmd, timeout=60):
         """Run command with timeout, ensuring all child processes are terminated"""
+        start_time = time.time()
+        logger.info(f"Starting command with {timeout}s timeout: {' '.join(cmd)}")
+        
         # Start process in new process group
         process = subprocess.Popen(
             cmd,
@@ -192,8 +310,24 @@ class SemgrepRunner:
             preexec_fn=os.setsid  # Create new process group
         )
         
+        # Log initial process info
+        logger.info(f"Started process with PID {process.pid}")
+        
+        # Monitor resource usage in a non-blocking way
+        try:
+            # Get initial resource usage
+            initial_resources = self._get_process_resource_usage(process.pid)
+            logger.info(f"Initial resource usage: {initial_resources}")
+        except Exception as e:
+            logger.warning(f"Failed to get initial resource usage: {e}")
+        
         try:
             stdout, stderr = process.communicate(timeout=timeout)
+            
+            # Log successful completion
+            elapsed_time = time.time() - start_time
+            logger.info(f"Command completed successfully in {elapsed_time:.2f}s with return code {process.returncode}")
+            
             # Construct a result object similar to subprocess.CompletedProcess
             # to maintain compatibility with existing code
             return type('CompletedProcess', (), {
@@ -203,18 +337,37 @@ class SemgrepRunner:
                 'args': cmd
             })
         except subprocess.TimeoutExpired:
-            # Kill entire process group
+            # Log timeout
+            elapsed_time = time.time() - start_time
+            logger.warning(f"Command timed out after {elapsed_time:.2f}s")
+            
+            # Get resource usage before termination
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # Try SIGTERM first
-                process.wait(timeout=5)  # Give time for graceful shutdown
-            except (subprocess.TimeoutExpired, ProcessLookupError):
-                # If still running or already gone, try SIGKILL
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass  # Process already gone
+                timeout_resources = self._get_process_resource_usage(process.pid)
+                logger.info(f"Resource usage at timeout: {timeout_resources}")
+            except Exception as e:
+                logger.warning(f"Failed to get resource usage at timeout: {e}")
+            
+            # Enhanced process group termination with verification
+            success, remaining_pids = self._terminate_process_group_with_verification(process.pid)
+            
+            if not success:
+                logger.error(f"Failed to terminate all processes. Remaining PIDs: {remaining_pids}")
+            
             # Raise an error to indicate timeout
             raise SemgrepRunnerError(f"Semgrep analysis timed out after {timeout} seconds for command: {' '.join(cmd)}")
         except Exception as e:
+            # Log other errors
+            elapsed_time = time.time() - start_time
+            logger.error(f"Command failed after {elapsed_time:.2f}s with error: {e}")
+            
+            # Try to terminate the process group
+            try:
+                success, remaining_pids = self._terminate_process_group_with_verification(process.pid)
+                if not success:
+                    logger.error(f"Failed to terminate all processes after error. Remaining PIDs: {remaining_pids}")
+            except Exception as term_error:
+                logger.error(f"Error while terminating process group: {term_error}")
+            
             # Catch other potential errors during Popen or communicate
             raise SemgrepRunnerError(f"Error during semgrep execution: {e} for command: {' '.join(cmd)}")

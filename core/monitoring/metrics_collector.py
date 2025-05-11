@@ -13,6 +13,7 @@ import sqlite3
 from typing import Dict, Any, List, Optional, Union, Tuple
 from datetime import datetime, timedelta
 import threading
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -56,33 +57,56 @@ class MetricsCollector:
     def _init_database(self):
         """Initialize the metrics database tables."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Create metrics table if it doesn't exist
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    metric_type TEXT NOT NULL,
-                    metric_name TEXT NOT NULL,
-                    metric_value REAL,
-                    metric_data TEXT
-                )
-            ''')
-            
-            # Create index on timestamp and metric_type
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_metrics_timestamp_type
-                ON metrics (timestamp, metric_type)
-            ''')
-            
-            conn.commit()
-            conn.close()
-            
-            logger.info("Metrics database initialized")
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Enable WAL mode for better concurrency
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA busy_timeout=10000")
+                
+                # Create metrics table if it doesn't exist
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS metrics (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        metric_type TEXT NOT NULL,
+                        metric_name TEXT NOT NULL,
+                        metric_value REAL,
+                        metric_data TEXT
+                    )
+                ''')
+                
+                # Create index on timestamp and metric_type
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_metrics_timestamp_type
+                    ON metrics (timestamp, metric_type)
+                ''')
+                
+                conn.commit()
+                
+            logger.info("Metrics database initialized with WAL mode")
         except sqlite3.Error as e:
             logger.error(f"Failed to initialize metrics database: {e}")
+            
+    @contextmanager
+    def _get_db_connection(self, timeout=20.0):
+        """Get a database connection with proper timeout settings."""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=timeout)
+            # Enable immediate transaction mode to reduce lock contention
+            conn.isolation_level = 'IMMEDIATE'
+            yield conn
+        except sqlite3.Error as e:
+            logger.error(f"Database connection error: {e}")
+            raise
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
     
     def collect_metrics(self) -> Dict[str, Any]:
         """
@@ -166,6 +190,10 @@ class MetricsCollector:
             metrics["network_bytes_sent"] = network.bytes_sent
             metrics["network_bytes_recv"] = network.bytes_recv
             
+            # Collect semgrep process metrics
+            semgrep_metrics = self._collect_semgrep_process_metrics()
+            metrics.update(semgrep_metrics)
+            
         except ImportError:
             logger.warning("psutil not installed, using limited performance metrics")
             
@@ -174,6 +202,63 @@ class MetricsCollector:
             
         except Exception as e:
             logger.error(f"Error collecting performance metrics: {e}")
+        
+        return metrics
+    
+    def _collect_semgrep_process_metrics(self) -> Dict[str, Any]:
+        """
+        Collect metrics specifically for semgrep processes.
+        
+        Returns:
+            Dictionary with semgrep process metrics
+        """
+        metrics = {}
+        
+        try:
+            import psutil
+            
+            # Find all semgrep processes
+            semgrep_processes = []
+            total_memory_percent = 0.0
+            
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'memory_percent', 'cpu_percent']):
+                try:
+                    # Check if this is a semgrep process
+                    if proc.info['name'] == 'semgrep' or (
+                        proc.info['cmdline'] and
+                        any('semgrep' in cmd for cmd in proc.info['cmdline'] if cmd)
+                    ):
+                        # Get detailed process info
+                        proc_info = {
+                            'pid': proc.info['pid'],
+                            'memory_percent': proc.info['memory_percent'],
+                            'cpu_percent': proc.info['cpu_percent'] or proc.cpu_percent(interval=0.1),
+                            'cmdline': ' '.join(proc.info['cmdline']) if proc.info['cmdline'] else '',
+                            'create_time': datetime.fromtimestamp(proc.create_time()).isoformat(),
+                            'running_time': time.time() - proc.create_time()
+                        }
+                        semgrep_processes.append(proc_info)
+                        total_memory_percent += proc.info['memory_percent']
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+            
+            # Store metrics
+            metrics["semgrep_process_count"] = len(semgrep_processes)
+            metrics["semgrep_memory_percent"] = total_memory_percent
+            metrics["semgrep_processes"] = semgrep_processes
+            
+            # Log warning if there are lingering semgrep processes
+            if len(semgrep_processes) > 0:
+                long_running_processes = [p for p in semgrep_processes if p['running_time'] > 120]  # > 2 minutes
+                if long_running_processes:
+                    logger.warning(f"Found {len(long_running_processes)} long-running semgrep processes: {long_running_processes}")
+                else:
+                    logger.info(f"Found {len(semgrep_processes)} semgrep processes")
+            
+        except ImportError:
+            logger.warning("psutil not installed, cannot collect semgrep process metrics")
+        except Exception as e:
+            logger.error(f"Error collecting semgrep process metrics: {e}")
         
         return metrics
     
@@ -187,34 +272,51 @@ class MetricsCollector:
         metrics = {}
         
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Check if tables exist before querying
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_analysis_results'")
+                has_analysis_table = cursor.fetchone() is not None
+                
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_findings'")
+                has_findings_table = cursor.fetchone() is not None
             
-            # Count total analyses
-            cursor.execute("SELECT COUNT(*) FROM analyses")
-            metrics["total_analyses"] = cursor.fetchone()[0]
+            if has_analysis_table:
+                # Count total analyses
+                cursor.execute("SELECT COUNT(*) FROM security_analysis_results")
+                metrics["total_analyses"] = cursor.fetchone()[0]
+                
+                # Count analyses in the last 24 hours
+                yesterday = (datetime.now() - timedelta(days=1)).isoformat()
+                cursor.execute("SELECT COUNT(*) FROM security_analysis_results WHERE analysis_timestamp > ?", (yesterday,))
+                metrics["analyses_last_24h"] = cursor.fetchone()[0]
+                
+                # Count unique files analyzed (using url_id as proxy since file_path doesn't exist)
+                cursor.execute("SELECT COUNT(DISTINCT url_id) FROM security_analysis_results")
+                metrics["unique_files_analyzed"] = cursor.fetchone()[0]
+            else:
+                self.logger.warning("Table 'security_analysis_results' does not exist. Skipping related metrics.")
+                metrics["total_analyses"] = 0
+                metrics["analyses_last_24h"] = 0
+                metrics["unique_files_analyzed"] = 0
             
-            # Count analyses in the last 24 hours
-            yesterday = (datetime.now() - timedelta(days=1)).isoformat()
-            cursor.execute("SELECT COUNT(*) FROM analyses WHERE timestamp > ?", (yesterday,))
-            metrics["analyses_last_24h"] = cursor.fetchone()[0]
+            if has_findings_table:
+                # Count findings by severity
+                cursor.execute("""
+                    SELECT severity, COUNT(*)
+                    FROM security_findings
+                    GROUP BY severity
+                """)
+                severity_counts = {}
+                for severity, count in cursor.fetchall():
+                    severity_counts[severity] = count
+                metrics["findings_by_severity"] = severity_counts
+            else:
+                self.logger.warning("Table 'security_findings' does not exist. Skipping related metrics.")
+                metrics["findings_by_severity"] = {}
             
-            # Count unique files analyzed
-            cursor.execute("SELECT COUNT(DISTINCT file_path) FROM analyses")
-            metrics["unique_files_analyzed"] = cursor.fetchone()[0]
-            
-            # Count findings by severity
-            cursor.execute("""
-                SELECT severity, COUNT(*) 
-                FROM findings 
-                GROUP BY severity
-            """)
-            severity_counts = {}
-            for severity, count in cursor.fetchall():
-                severity_counts[severity] = count
-            metrics["findings_by_severity"] = severity_counts
-            
-            conn.close()
+                # No need to close connection - handled by context manager
             
         except sqlite3.Error as e:
             logger.error(f"Error collecting usage metrics from database: {e}")
@@ -271,50 +373,74 @@ class MetricsCollector:
         metrics = {}
         
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Check if tables exist before querying
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_findings'")
+                has_findings_table = cursor.fetchone() is not None
+                
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_analysis_results'")
+                has_analysis_table = cursor.fetchone() is not None
             
-            # Count findings by type
-            cursor.execute("""
-                SELECT finding_type, COUNT(*) 
-                FROM findings 
-                GROUP BY finding_type
-            """)
-            type_counts = {}
-            for finding_type, count in cursor.fetchall():
-                type_counts[finding_type] = count
-            metrics["findings_by_type"] = type_counts
+            if has_findings_table:
+                # Count findings by type
+                cursor.execute("""
+                    SELECT finding_type, COUNT(*)
+                    FROM security_findings
+                    GROUP BY finding_type
+                """)
+                type_counts = {}
+                for finding_type, count in cursor.fetchall():
+                    type_counts[finding_type] = count
+                metrics["findings_by_type"] = type_counts
+                
+                # Count findings by analyzer (if column exists)
+                try:
+                    cursor.execute("""
+                        SELECT analysis_id, COUNT(*)
+                        FROM security_findings
+                        GROUP BY analysis_id
+                    """)
+                    analyzer_counts = {}
+                    for analyzer, count in cursor.fetchall():
+                        analyzer_counts[f"analysis_{analyzer}"] = count
+                    metrics["findings_by_analyzer"] = analyzer_counts
+                except sqlite3.OperationalError:
+                    self.logger.warning("Column 'analyzer' does not exist in security_findings table")
+                    metrics["findings_by_analyzer"] = {}
+            else:
+                self.logger.warning("Table 'security_findings' does not exist. Skipping related metrics.")
+                metrics["findings_by_type"] = {}
+                metrics["findings_by_analyzer"] = {}
             
-            # Count findings by analyzer
-            cursor.execute("""
-                SELECT analyzer, COUNT(*) 
-                FROM findings 
-                GROUP BY analyzer
-            """)
-            analyzer_counts = {}
-            for analyzer, count in cursor.fetchall():
-                analyzer_counts[analyzer] = count
-            metrics["findings_by_analyzer"] = analyzer_counts
+            if has_analysis_table:
+                # Get average analysis time (using a different approach since duration might not exist)
+                try:
+                    cursor.execute("""
+                        SELECT AVG(julianday(analysis_timestamp) - julianday(analysis_timestamp))
+                        FROM security_analysis_results
+                    """)
+                    avg_duration = cursor.fetchone()[0]
+                    metrics["avg_analysis_duration"] = avg_duration if avg_duration else 0
+                    
+                    # Get max analysis time
+                    cursor.execute("""
+                        SELECT MAX(julianday(analysis_timestamp) - julianday(analysis_timestamp))
+                        FROM security_analysis_results
+                    """)
+                    max_duration = cursor.fetchone()[0]
+                    metrics["max_analysis_duration"] = max_duration if max_duration else 0
+                except sqlite3.OperationalError:
+                    self.logger.warning("Could not calculate duration metrics")
+                    metrics["avg_analysis_duration"] = 0
+                    metrics["max_analysis_duration"] = 0
+            else:
+                self.logger.warning("Table 'security_analysis_results' does not exist. Skipping related metrics.")
+                metrics["avg_analysis_duration"] = 0
+                metrics["max_analysis_duration"] = 0
             
-            # Get average analysis time
-            cursor.execute("""
-                SELECT AVG(duration) 
-                FROM analyses 
-                WHERE duration IS NOT NULL
-            """)
-            avg_duration = cursor.fetchone()[0]
-            metrics["avg_analysis_duration"] = avg_duration if avg_duration else 0
-            
-            # Get max analysis time
-            cursor.execute("""
-                SELECT MAX(duration) 
-                FROM analyses 
-                WHERE duration IS NOT NULL
-            """)
-            max_duration = cursor.fetchone()[0]
-            metrics["max_analysis_duration"] = max_duration if max_duration else 0
-            
-            conn.close()
+                # No need to close connection - handled by context manager
             
         except sqlite3.Error as e:
             logger.error(f"Error collecting analysis metrics from database: {e}")
@@ -330,65 +456,147 @@ class MetricsCollector:
         Args:
             metrics: Dictionary with metrics to store
         """
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            timestamp = metrics["timestamp"]
-            
-            # Store each metric
-            for metric_type, type_metrics in metrics["metrics"].items():
-                for metric_name, metric_value in type_metrics.items():
-                    # Handle nested metrics
-                    if isinstance(metric_value, dict):
-                        # Store as JSON string
-                        cursor.execute('''
-                            INSERT INTO metrics (timestamp, metric_type, metric_name, metric_data)
-                            VALUES (?, ?, ?, ?)
-                        ''', (timestamp, metric_type, metric_name, json.dumps(metric_value)))
-                    else:
-                        # Store as numeric value
-                        cursor.execute('''
-                            INSERT INTO metrics (timestamp, metric_type, metric_name, metric_value)
-                            VALUES (?, ?, ?, ?)
-                        ''', (timestamp, metric_type, metric_name, metric_value))
-            
-            conn.commit()
-            
-            # Clean up old metrics
-            self._cleanup_old_metrics(cursor)
-            
-            conn.commit()
-            conn.close()
-            
-        except sqlite3.Error as e:
-            logger.error(f"Error storing metrics in database: {e}")
-        except Exception as e:
-            logger.error(f"Error storing metrics: {e}")
-    
-    def _cleanup_old_metrics(self, cursor):
-        """
-        Clean up old metrics from the database.
+        max_retries = 5
+        retry_delay = 0.5  # Start with 0.5 second delay
         
-        Args:
-            cursor: SQLite cursor
-        """
-        try:
-            # Calculate cutoff date
-            cutoff_date = (datetime.now() - timedelta(days=self.retention_days)).isoformat()
-            
-            # Delete old metrics
-            cursor.execute('''
-                DELETE FROM metrics
-                WHERE timestamp < ?
-            ''', (cutoff_date,))
-            
-            deleted_count = cursor.rowcount
-            if deleted_count > 0:
-                logger.info(f"Cleaned up {deleted_count} old metrics")
+        for attempt in range(max_retries):
+            try:
+                with self._get_db_connection(timeout=30.0) as conn:
+                    cursor = conn.cursor()
+                    
+                    timestamp = metrics["timestamp"]
+                    start_time = time.time()
+                    
+                    # Store each metric in batches to reduce lock time
+                    batch_size = 20  # Increased batch size for better performance
+                    metric_batch = []
+                    
+                    for metric_type, type_metrics in metrics["metrics"].items():
+                        for metric_name, metric_value in type_metrics.items():
+                            # Handle different data types
+                            if isinstance(metric_value, (dict, list)):
+                                # Serialize complex data structures to JSON
+                                metric_batch.append((timestamp, metric_type, metric_name, json.dumps(metric_value), None))
+                            elif metric_value is not None and not isinstance(metric_value, (int, float, str, bool)):
+                                # Convert any other non-standard types to string representation
+                                metric_batch.append((timestamp, metric_type, metric_name, str(metric_value), None))
+                            else:
+                                # Store as numeric value
+                                metric_batch.append((timestamp, metric_type, metric_name, None, metric_value))
+                            
+                            # Execute in batches
+                            if len(metric_batch) >= batch_size:
+                                self._execute_metric_batch(cursor, metric_batch)
+                                metric_batch = []
+                    
+                    # Insert any remaining metrics
+                    if metric_batch:
+                        self._execute_metric_batch(cursor, metric_batch)
+                    
+                    # Log metrics storage time
+                    metrics_time = time.time() - start_time
+                    if metrics_time > 1.0:
+                        logger.info(f"Metrics storage took {metrics_time:.2f}s")
+                    
+                    # Clean up old metrics in a separate transaction to avoid long locks
+                    if attempt == 0:  # Only try cleanup on first attempt
+                        self._cleanup_old_metrics_separate_connection()
                 
+                # If we get here, the operation was successful
+                return
+                
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    # Database is locked, retry after a delay
+                    logger.warning(f"Database is locked, retrying in {retry_delay} seconds (attempt {attempt+1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    # Exponential backoff
+                    retry_delay *= 2
+                else:
+                    # Either it's not a lock error or we've exhausted our retries
+                    logger.error(f"Error storing metrics in database: {e}")
+                    break
+            except sqlite3.Error as e:
+                logger.error(f"Error storing metrics in database: {e}")
+                break
+            except Exception as e:
+                logger.error(f"Error storing metrics: {e}")
+                break
+    
+    def _execute_metric_batch(self, cursor, metric_batch):
+        """Execute a batch of metric insertions."""
+        # Insert metrics with data (serialized complex types)
+        data_metrics = [(t, mt, mn, md) for t, mt, mn, md, mv in metric_batch if md is not None]
+        if data_metrics:
+            cursor.executemany('''
+                INSERT INTO metrics (timestamp, metric_type, metric_name, metric_data)
+                VALUES (?, ?, ?, ?)
+            ''', data_metrics)
+        
+        # Insert metrics with values (numeric types)
+        value_metrics = [(t, mt, mn, mv) for t, mt, mn, md, mv in metric_batch if mv is not None]
+        if value_metrics:
+            cursor.executemany('''
+                INSERT INTO metrics (timestamp, metric_type, metric_name, metric_value)
+                VALUES (?, ?, ?, ?)
+            ''', value_metrics)
+    
+    def _cleanup_old_metrics_separate_connection(self):
+        """Clean up old metrics using a separate connection to avoid holding locks."""
+        try:
+            # Run cleanup in a separate thread to avoid blocking
+            cleanup_thread = threading.Thread(target=self._cleanup_old_metrics_thread)
+            cleanup_thread.daemon = True
+            cleanup_thread.start()
+        except Exception as e:
+            logger.error(f"Failed to start cleanup thread: {e}")
+    
+    def _cleanup_old_metrics_thread(self):
+        """Thread function to clean up old metrics."""
+        try:
+            with self._get_db_connection(timeout=10.0) as conn:
+                cursor = conn.cursor()
+                
+                # Calculate cutoff date
+                cutoff_date = (datetime.now() - timedelta(days=self.retention_days)).isoformat()
+                
+                # Delete old metrics in smaller batches to reduce lock time
+                batch_size = 500  # Smaller batch size to reduce lock time
+                total_deleted = 0
+                max_batches = 5  # Limit the number of batches per cleanup to avoid long operations
+                
+                for batch in range(max_batches):
+                    start_time = time.time()
+                    
+                    cursor.execute('''
+                        DELETE FROM metrics
+                        WHERE rowid IN (
+                            SELECT rowid FROM metrics
+                            WHERE timestamp < ?
+                            LIMIT ?
+                        )
+                    ''', (cutoff_date, batch_size))
+                    
+                    deleted_count = cursor.rowcount
+                    total_deleted += deleted_count
+                    conn.commit()  # Commit after each batch
+                    
+                    # Log cleanup time if it's slow
+                    batch_time = time.time() - start_time
+                    if batch_time > 1.0:
+                        logger.info(f"Metrics cleanup batch took {batch_time:.2f}s")
+                    
+                    # If we deleted less than the batch size, we're done
+                    if deleted_count < batch_size:
+                        break
+                
+                if total_deleted > 0:
+                    logger.info(f"Cleaned up {total_deleted} old metrics")
+                    
         except sqlite3.Error as e:
             logger.error(f"Error cleaning up old metrics: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in cleanup thread: {e}")
     
     def get_metrics(self, metric_type: Optional[str] = None, 
                    start_time: Optional[str] = None, 
@@ -410,9 +618,9 @@ class MetricsCollector:
         }
         
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row  # Enable row factory for named columns
-            cursor = conn.cursor()
+            with self._get_db_connection() as conn:
+                conn.row_factory = sqlite3.Row  # Enable row factory for named columns
+                cursor = conn.cursor()
             
             # Build query
             query = "SELECT * FROM metrics"
@@ -467,7 +675,7 @@ class MetricsCollector:
                     "value": value
                 })
             
-            conn.close()
+                # No need to close connection - handled by context manager
             
         except sqlite3.Error as e:
             logger.error(f"Error retrieving metrics from database: {e}")
