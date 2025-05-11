@@ -335,6 +335,107 @@ class TestSystemEndToEnd:
         monkeypatch.setattr(ContentRetriever, "retrieve", original_retrieve)
 ```
 
+### Testing for Timeout Robustness
+
+Testing the system's ability to handle timeouts, especially in static analysis, is critical for ensuring production reliability. These tests should:
+
+- Verify proper handling of large and complex content
+- Ensure timeouts are detected and handled gracefully
+- Confirm that alternative analysis paths are triggered appropriately
+- Validate that the pipeline continues processing other items after a timeout
+
+Example timeout robustness test:
+
+```python
+# tests/test_static_analysis_timeout.py
+import pytest
+from core.pipeline import Pipeline
+from core.analysis.static.analyzer import StaticAnalyzer
+
+class TestTimeoutHandling:
+    """Tests for static analysis timeout handling."""
+    
+    @pytest.fixture
+    def complex_content(self):
+        """Load a complex markdown file known to cause timeouts."""
+        with open("tests/data/large_complex_markdown.llms.txt", "r") as f:
+            return f.read()
+    
+    def test_complex_content_detection(self, complex_content):
+        """Test that complex content is correctly identified."""
+        analyzer = StaticAnalyzer()
+        
+        # Create a test item with complex content
+        item = {
+            "id": "test-complex",
+            "content": complex_content,
+            "language": "markdown"
+        }
+        
+        # Analyze the content
+        findings = analyzer.analyze(item)
+        
+        # Verify that alternative analysis was used
+        assert any(finding.get("rule_id") == "alternative_analysis_used"
+                  for finding in findings), "Alternative analysis was not triggered"
+    
+    def test_pipeline_continues_after_timeout(self):
+        """Test that pipeline continues processing after an item times out."""
+        # Create a pipeline with a short timeout
+        config = {
+            "db": {"path": ":memory:"},
+            "pipeline_workers": 2,
+            "max_timeout": 10  # Short timeout to trigger timeout handling
+        }
+        
+        pipeline = Pipeline(config=config)
+        
+        # Create test items - one normal, one that will timeout
+        items = [
+            {
+                "id": "normal-item",
+                "content": "# Simple content\n\nThis is a test.",
+                "language": "markdown"
+            },
+            {
+                "id": "timeout-item",
+                "content": "# " + ("A" * 1000000),  # Very large content
+                "language": "markdown"
+            }
+        ]
+        
+        # Mock content retriever to return our test items
+        pipeline.content_retriever.retrieve = lambda query=None: items
+        
+        # Run the pipeline
+        report = pipeline.run()
+        
+        # Verify pipeline completed
+        assert report is not None
+        
+        # Check metrics to confirm both items were processed
+        metrics = pipeline.get_performance_metrics()
+        assert "total" in metrics
+        
+        # Verify the error was recorded but pipeline continued
+        assert any("timeout" in str(result).lower()
+                  for result in pipeline.get_analysis_results() if isinstance(result, dict) and "error" in result)
+```
+
+For running timeout-specific tests:
+
+```bash
+# Run timeout tests
+python tests/run_timeout_tests.py
+
+# Run simplified timeout tests (faster)
+python tests/run_timeout_tests_simplified.py
+```
+
+When testing timeout handling, use the test data files specifically designed for this purpose:
+- `tests/data/large_complex_markdown.llms.txt`: Contains complex markdown that triggers alternative analysis
+- `tests/data/extremely_large_content.llms.txt`: Contains content that exceeds size limits
+
 ### Performance Tests
 
 Performance tests measure the system's performance characteristics. They should:
@@ -915,6 +1016,9 @@ Test results are saved in the specified output directory (default: `test_results
 - Use `pytest --pdb` to drop into debugger on failure
 - Add print statements for debugging
 - Check logs for error messages
+- For timeout issues, examine the detailed logs with timestamps to identify where processing is hanging
+- Review the technical notes in `docs/technical_notes/static_analysis_timeout_handling.md` for debugging timeout problems
+- Use the `--log-cli-level=DEBUG` option with pytest to see detailed timeout-related logging
 
 ## Best Practices
 

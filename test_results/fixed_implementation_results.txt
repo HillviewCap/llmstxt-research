@@ -1,0 +1,20 @@
+Success: True
+
+STDOUT:
+============================= test session starts ==============================
+platform linux -- Python 3.13.3, pytest-8.3.5, pluggy-1.5.0 -- /home/jenkins/llmstxt-research/venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /home/jenkins/llmstxt-research
+configfile: pyproject.toml
+collecting ... collected 5 items
+
+tests/test_static_analysis_timeout_simplified.py::TestStaticAnalysisTimeout::test_content_size_check PASSED [ 20%]
+tests/test_static_analysis_timeout_simplified.py::TestStaticAnalysisTimeout::test_complex_generic_content_detection PASSED [ 40%]
+tests/test_static_analysis_timeout_simplified.py::TestStaticAnalysisTimeout::test_dynamic_timeout_calculation PASSED [ 60%]
+tests/test_static_analysis_timeout_simplified.py::TestStaticAnalysisTimeout::test_timeout_handling PASSED [ 80%]
+tests/test_static_analysis_timeout_simplified.py::TestStaticAnalysisTimeout::test_extremely_large_content PASSED [100%]
+
+============================== 5 passed in 0.02s ===============================
+
+
+STDERR:

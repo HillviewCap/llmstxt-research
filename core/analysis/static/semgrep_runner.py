@@ -22,6 +22,8 @@ class SemgrepRunner:
         self.registry_rulesets = registry_rulesets or []
         self.rules = self._load_rules()
         self.rule_metadata = self._extract_rule_metadata()
+        # Maximum content size for direct analysis (in bytes)
+        self.max_content_size = self.config.get("max_content_size", 1024 * 1024)  # Default 1MB
 
     def _load_rules(self) -> List[str]:
         if not os.path.isdir(self.rules_path):
@@ -68,6 +70,28 @@ class SemgrepRunner:
             # and for semgrep to know how to parse it.
             raise SemgrepRunnerError("Language must be provided when scanning content.")
 
+        # Check content size before processing
+        if content and len(content) > self.max_content_size:
+            print(f"Content size ({len(content)} bytes) exceeds maximum allowed size ({self.max_content_size} bytes)")
+            return [{"rule_id": "content_too_large",
+                     "path": "in-memory-content",
+                     "start": {"line": 1, "col": 1},
+                     "end": {"line": 1, "col": 1},
+                     "extra": {"message": f"Content size ({len(content)} bytes) exceeds maximum allowed size"},
+                     "category": "Performance",
+                     "priority": "Medium"}]
+
+        # Skip semgrep for generic/markdown content that's too complex
+        if language == 'generic' and content and self._is_complex_content(content):
+            print(f"Skipping semgrep for complex generic content ({len(content)} bytes, {content.count('\\n')} lines)")
+            return [{"rule_id": "complex_generic_content",
+                     "path": "in-memory-content",
+                     "start": {"line": 1, "col": 1},
+                     "end": {"line": 1, "col": 1},
+                     "extra": {"message": "Content too complex for generic language analysis"},
+                     "category": "Performance",
+                     "priority": "Low"}]
+
         actual_scan_path = None
         temp_file_path_for_cleanup = None # Store path for cleanup
 
@@ -101,15 +125,18 @@ class SemgrepRunner:
             cmd = [
                 "semgrep",
                 "--json", # Output in JSON format
+                "--timeout", "30", # Set explicit timeout for semgrep itself
             ]
             
-            # For generic language, we need to use pattern mode instead of rules
+            # For generic language, use a different approach
             if language == 'generic':
-                # Use a simple pattern that won't match anything for markdown content
-                # This allows us to proceed without errors while not producing false positives
+                # Use a more efficient approach for generic content
+                # Instead of a pattern that might cause timeouts, use a simple rule
+                # that's less likely to hang
                 cmd.extend([
-                    "-e", "impossible_pattern_for_markdown_content_123456789",
-                    "--lang", language,
+                    "--config", "r2c-ci",  # Use a lightweight ruleset
+                    "--max-memory", "1024",  # Limit memory usage
+                    "--max-target-bytes", str(self.max_content_size),  # Limit file size
                     actual_scan_path
                 ])
             else:
@@ -132,9 +159,12 @@ class SemgrepRunner:
             if not shutil.which("semgrep"):
                 raise SemgrepRunnerError("Semgrep executable not found. Please ensure it is installed and in PATH.")
 
-            # Execute Semgrep
-            # check=False because Semgrep returns 1 for findings, which would raise CalledProcessError
-            process = self.run_with_process_group_timeout(cmd, timeout=60)
+            # Calculate dynamic timeout based on content size
+            timeout = self._calculate_timeout(content if content else os.path.getsize(actual_scan_path))
+            print(f"Running semgrep with {timeout}s timeout for {len(content) if content else 'file'} bytes")
+            
+            # Execute Semgrep with dynamic timeout
+            process = self.run_with_process_group_timeout(cmd, timeout=timeout)
 
             # Semgrep exit codes:
             # 0: No findings
@@ -295,6 +325,43 @@ class SemgrepRunner:
         else:
             logger.error(f"Failed to terminate all processes in group {pid} after {max_attempts} attempts. Remaining PIDs: {remaining_pids}")
             return False, remaining_pids
+            
+    def _is_complex_content(self, content: str) -> bool:
+        """
+        Determine if content is too complex for generic language analysis
+        """
+        # Check content size
+        if len(content) > 100000:  # 100KB
+            return True
+            
+        # Check line count
+        if content.count('\n') > 1000:  # More than 1000 lines
+            return True
+            
+        # Check for complex patterns that might cause semgrep to hang
+        complex_patterns = [
+            r'```',  # Code blocks in markdown
+            r'\[\[',  # Wiki-style links
+            r'\{\{',  # Template syntax
+        ]
+        
+        for pattern in complex_patterns:
+            if content.count(pattern) > 10:  # More than 10 occurrences
+                return True
+                
+        return False
+        
+    def _calculate_timeout(self, content_size: int) -> int:
+        """
+        Calculate appropriate timeout based on content size
+        """
+        # Base timeout
+        base_timeout = 30
+        
+        # Add 1 second for each 10KB of content, up to a maximum
+        size_factor = min(content_size / 10240, 30)  # Cap at 30 seconds additional
+        
+        return int(base_timeout + size_factor)
     
     def run_with_process_group_timeout(self, cmd, timeout=60):
         """Run command with timeout, ensuring all child processes are terminated"""
@@ -325,8 +392,8 @@ class SemgrepRunner:
             stdout, stderr = process.communicate(timeout=timeout)
             
             # Log successful completion
-            elapsed_time = time.time() - start_time
-            logger.info(f"Command completed successfully in {elapsed_time:.2f}s with return code {process.returncode}")
+            execution_time = time.time() - start_time
+            logger.info(f"Command completed successfully in {execution_time:.2f}s with return code {process.returncode}")
             
             # Construct a result object similar to subprocess.CompletedProcess
             # to maintain compatibility with existing code
@@ -334,7 +401,8 @@ class SemgrepRunner:
                 'returncode': process.returncode,
                 'stdout': stdout,
                 'stderr': stderr,
-                'args': cmd
+                'args': cmd,
+                'execution_time': execution_time
             })
         except subprocess.TimeoutExpired:
             # Log timeout
@@ -353,7 +421,23 @@ class SemgrepRunner:
             
             if not success:
                 logger.error(f"Failed to terminate all processes. Remaining PIDs: {remaining_pids}")
-            
+                
+                # Additional cleanup for stubborn processes
+                try:
+                    # Find child processes that might still be running
+                    ps_cmd = ["ps", "-o", "pid", "--ppid", str(process.pid), "--noheaders"]
+                    child_pids = subprocess.check_output(ps_cmd, text=True).strip().split('\n')
+                    
+                    # Kill any remaining children
+                    for pid in child_pids:
+                        if pid.strip():
+                            try:
+                                os.kill(int(pid.strip()), signal.SIGKILL)
+                                logger.info(f"Killed child process {pid}")
+                            except (ProcessLookupError, ValueError):
+                                pass
+                except (subprocess.SubprocessError, FileNotFoundError):
+                    pass  # Ignore if ps command fails
             # Raise an error to indicate timeout
             raise SemgrepRunnerError(f"Semgrep analysis timed out after {timeout} seconds for command: {' '.join(cmd)}")
         except Exception as e:
@@ -370,4 +454,5 @@ class SemgrepRunner:
                 logger.error(f"Error while terminating process group: {term_error}")
             
             # Catch other potential errors during Popen or communicate
+            print(f"ERROR: Semgrep execution failed: {e}")
             raise SemgrepRunnerError(f"Error during semgrep execution: {e} for command: {' '.join(cmd)}")

@@ -6,7 +6,7 @@ The LLMs.txt Security Analysis Platform is designed with modular, clean architec
 
 - **Database Layer**: Manages metadata, content storage, and retrieval.
 - **Content Layer**: Handles ingestion, parsing, and preprocessing of LLMs.txt and related files.
-- **Analysis Layer**: Performs static, pattern-based, secret, and markdown analysis using pluggable analyzers.
+- **Analysis Layer**: Performs static, pattern-based, secret, and markdown analysis using pluggable analyzers. Includes robustness mechanisms such as content size limits, complexity detection, and alternative analysis paths for problematic content types.
 - **Scoring Layer**: Assigns risk scores and classifications based on analysis results.
 - **Reporting Layer**: Generates reports, dashboards, and alerts for stakeholders.
 
@@ -28,7 +28,7 @@ The LLMs.txt Security Analysis Platform is designed with modular, clean architec
 
 ## Orchestration
 
-The pipeline orchestrator (`core/pipeline.py`) coordinates all components, manages workflow execution, error handling, and performance metrics.
+The pipeline orchestrator (`core/pipeline.py`) coordinates all components, manages workflow execution, error handling, and performance metrics. It implements dynamic, content-aware timeouts for analysis threads and ensures robust termination of underlying processes when timeouts occur.
 
 ## Extensibility
 
@@ -40,6 +40,9 @@ The pipeline orchestrator (`core/pipeline.py`) coordinates all components, manag
 - Robust error handling at each stage
 - Logging and performance metrics for monitoring
 - Recovery mechanisms for partial failures
+- Layered timeout mechanisms at thread, process, and tool levels
+- Alternative analysis paths for known problematic content types
+- Graceful degradation when optimal analysis is not possible
 
 ## Technology Stack
 

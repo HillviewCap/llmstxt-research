@@ -52,10 +52,10 @@ This document provides detailed descriptions of all major components in the LLMs
 **Location:** `core/analysis/`
 
 #### Static Analysis (`static/`)
-- **Analyzer (`analyzer.py`)**: Coordinates static code analysis
+- **Analyzer (`analyzer.py`)**: Coordinates static code analysis; implements pre-analysis checks for content size and line count limits; provides specialized handling for complex generic/markdown content with alternative regex-based analysis path; includes robust error handling that converts exceptions to findings
 - **Finding Manager (`finding_manager.py`)**: Manages static analysis findings
 - **Rule Manager (`rule_manager.py`)**: Manages static analysis rules
-- **Semgrep Runner (`semgrep_runner.py`)**: Interfaces with Semgrep for code analysis
+- **Semgrep Runner (`semgrep_runner.py`)**: Interfaces with Semgrep for code analysis; implements robust timeout management with dynamic timeout calculation based on content size; uses process group termination to reliably handle hung processes; provides optimized handling for 'generic' language content using lightweight rulesets
 
 #### Pattern Analysis (`patterns/`)
 - **Analyzer (`analyzer.py`)**: Coordinates pattern-based analysis
@@ -134,6 +134,10 @@ This document provides detailed descriptions of all major components in the LLMs
 - Manages execution flow and error handling
 - Collects performance metrics
 - Implements recovery mechanisms
+- Manages parallel analysis threads with dynamically calculated timeouts based on content size, complexity, and language
+- Implements robust thread timeout detection with detailed diagnostics and stack trace logging
+- Provides process termination capabilities to handle runaway child processes
+- Ensures graceful degradation when analysis components encounter issues
 
 ### Plugin System
 
