@@ -1,0 +1,25 @@
+This is a sample file for testing the temporal analysis pipeline.
+
+It contains some basic text that can be used to test the version tracking,
+change detection, and historical analysis components of the temporal pipeline.
+
+You can modify this file between runs to test how the temporal analysis
+pipeline detects and analyzes changes over time.
+
+Sample code block:
+```python
+def hello_world():
+    print("Hello, world!")
+```
+
+Sample markdown:
+# Heading 1
+## Heading 2
+- List item 1
+- List item 2
+
+Sample table:
+| Column 1 | Column 2 |
+|----------|----------|
+| Value 1  | Value 2  |
+| Value 3  | Value 4  |

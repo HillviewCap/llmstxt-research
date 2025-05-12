@@ -21,6 +21,7 @@ yara-python           # Pattern matching
 bandit                # Python security linting
 #owasp-dependency-check # Dependency scanning
 psutil>=5.9.0          # Process and system monitoring
+pyyaml
 
 # ---------------------------
 # Machine Learning Libraries
