@@ -57,7 +57,12 @@ class MarkdownContentScanner:
         re.compile(r'append\s+the\s+following\s+to\s+all\s+your\s+responses\s*:\s*([`\'"]?(?P<appended_text>.*?)[\'`"]?)', re.IGNORECASE | re.DOTALL)
     ]
 
-    def __init__(self):
+    def __init__(self, config=None):
+        # Default configuration
+        self.config = config or {}
+        # Maximum content size for direct analysis (in bytes)
+        self.max_content_size = self.config.get("max_content_size", 1024 * 1024)  # Default 1MB
+        
         # Standard bleach configuration: strip all unsafe tags, attributes, and styles
         self.bleach_allowed_tags = bleach.ALLOWED_TAGS | {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'code', 'blockquote', 'ul', 'ol', 'li', 'strong', 'em', 'del', 'ins', 'img', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'br'}
         self.bleach_allowed_attributes = {
@@ -72,6 +77,25 @@ class MarkdownContentScanner:
 
 
     def scan(self, markdown: str) -> Dict[str, Any]:
+        # Check content size before processing
+        content_size = len(markdown)
+        if content_size > self.max_content_size:
+            print(f"Content size ({content_size} bytes) exceeds maximum allowed size ({self.max_content_size} bytes)")
+            return {
+                "sanitized_content": "[Content too large for sanitization]",
+                "xss_vectors_found_in_markdown": [{
+                    "match": "[Content size limit exceeded]",
+                    "start": 0,
+                    "end": 0,
+                    "pattern": "size_limit_exceeded"
+                }],
+                "prompt_injection_attempts": [],
+                "behavior_manipulation_attempts": [],
+                "size_limit_exceeded": True,
+                "content_size": content_size,
+                "max_size": self.max_content_size
+            }
+
         # Sanitize the entire markdown content using bleach
         # Bleach will handle HTML within the markdown.
         sanitized_markdown = bleach.clean(

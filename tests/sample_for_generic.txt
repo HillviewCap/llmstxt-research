@@ -1,0 +1,10 @@
+This is a sample text file with some potentially suspicious content.
+
+# Command with variable
+system("rm -rf $HOME/important_files")
+
+# API key
+api_key="sk_live_1234567890abcdefghijklmnopqrstuvwxyz"
+
+# URL
+https://malicious-example.com/download?file=suspicious.exe

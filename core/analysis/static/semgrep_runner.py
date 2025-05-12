@@ -4,6 +4,7 @@ import os
 import signal
 import tempfile
 import shutil
+import time
 from typing import List, Dict, Any, Optional
 
 class SemgrepRunnerError(Exception):
@@ -31,26 +32,60 @@ class SemgrepRunner:
         return rules
 
     def _extract_rule_metadata(self) -> Dict[str, Dict[str, Any]]:
-        # Extracts priority and category from rule YAML headers (simple parsing)
+        # Extracts priority and category from rule YAML files
         metadata = {}
         for rule_file in self.rules:
             try:
                 with open(rule_file, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                rule_id, category, priority = None, "Uncategorized", "Medium"
-                for line in lines:
-                    if line.strip().startswith("id:"):
-                        rule_id = line.split(":", 1)[1].strip()
-                    if line.strip().startswith("category:"):
-                        category = line.split(":", 1)[1].strip()
-                    if line.strip().startswith("priority:"):
-                        priority = line.split(":", 1)[1].strip()
-                    if rule_id and category and priority:
-                        break
-                if rule_id:
-                    metadata[rule_id] = {"category": category, "priority": priority, "file": rule_file}
-            except Exception:
+                    # Try to parse the YAML file properly
+                    try:
+                        import yaml
+                        rule_data = yaml.safe_load(f)
+                        
+                        # Handle the nested structure of semgrep rule files
+                        if rule_data and 'rules' in rule_data:
+                            for rule in rule_data['rules']:
+                                rule_id = rule.get('id')
+                                if rule_id:
+                                    category = rule.get('category', "Uncategorized")
+                                    priority = rule.get('priority', "Medium")
+                                    metadata[rule_id] = {
+                                        "category": category,
+                                        "priority": priority,
+                                        "file": rule_file
+                                    }
+                    except ImportError:
+                        # Fallback to simple parsing if yaml module is not available
+                        f.seek(0)  # Reset file pointer to beginning
+                        lines = f.readlines()
+                        in_rule_block = False
+                        rule_id, category, priority = None, "Uncategorized", "Medium"
+                        
+                        for line in lines:
+                            line = line.strip()
+                            if line == "rules:":
+                                continue
+                            if line.startswith("- id:"):
+                                # Start of a new rule block
+                                rule_id = line.split(":", 1)[1].strip()
+                                in_rule_block = True
+                            elif in_rule_block and line.startswith("category:"):
+                                category = line.split(":", 1)[1].strip()
+                            elif in_rule_block and line.startswith("priority:"):
+                                priority = line.split(":", 1)[1].strip()
+                            elif in_rule_block and line.startswith("- id:"):
+                                # New rule block, save the previous one
+                                if rule_id:
+                                    metadata[rule_id] = {"category": category, "priority": priority, "file": rule_file}
+                                rule_id = line.split(":", 1)[1].strip()
+                            
+                        # Save the last rule if we found one
+                        if rule_id:
+                            metadata[rule_id] = {"category": category, "priority": priority, "file": rule_file}
+            except Exception as e:
+                print(f"Error extracting metadata from {rule_file}: {e}")
                 continue
+                
         return metadata
 
     def run(self,
@@ -125,14 +160,27 @@ class SemgrepRunner:
             # For generic language, use a different approach
             if language == 'generic':
                 # Use a more efficient approach for generic content
-                # Instead of a pattern that might cause timeouts, use a simple rule
+                # Instead of a pattern that might cause timeouts, use our local generic ruleset
                 # that's less likely to hang
-                cmd.extend([
-                    "--config", "r2c-ci",  # Use a lightweight ruleset
-                    "--max-memory", "1024",  # Limit memory usage
-                    "--max-target-bytes", str(self.max_content_size),  # Limit file size
-                    actual_scan_path
-                ])
+                generic_ruleset_path = os.path.join(self.rules_path, "generic_content.yml")
+                
+                # For generic content, we'll use the config-based approach without specifying --lang
+                # as that requires a pattern which we don't want to use
+                if os.path.exists(generic_ruleset_path):
+                    cmd.extend([
+                        "--config", generic_ruleset_path,  # Use our lightweight generic ruleset
+                        "--max-memory", "1024",  # Limit memory usage
+                        "--max-target-bytes", str(self.max_content_size),  # Limit file size
+                        actual_scan_path
+                    ])
+                else:
+                    # Fallback to using just the standard rules if generic ruleset doesn't exist
+                    cmd.extend([
+                        "--config", self.rules_path,
+                        "--max-memory", "1024",  # Limit memory usage
+                        "--max-target-bytes", str(self.max_content_size),  # Limit file size
+                        actual_scan_path
+                    ])
             else:
                 # Normal rules-based scanning
                 # Add local rules path
@@ -145,17 +193,18 @@ class SemgrepRunner:
                 # Add target file
                 cmd.append(actual_scan_path)
                 
-                # If language is specified (especially for content scanning, or to override auto-detection)
-                if language:
-                    cmd.extend(["--lang", language])
+                # For language-specific scanning, we rely on file extension and auto-detection
+                # rather than explicitly setting --lang which requires a pattern
             
             # Check if semgrep executable is available
             if not shutil.which("semgrep"):
                 raise SemgrepRunnerError("Semgrep executable not found. Please ensure it is installed and in PATH.")
 
             # Calculate dynamic timeout based on content size
-            timeout = self._calculate_timeout(content if content else os.path.getsize(actual_scan_path))
-            print(f"Running semgrep with {timeout}s timeout for {len(content) if content else 'file'} bytes")
+            content_size = len(content) if content else os.path.getsize(actual_scan_path)
+            timeout = self._calculate_timeout(content_size)
+            print(f"Running semgrep with {timeout}s timeout for {content_size} bytes")
+            print(f"Command: {' '.join(cmd)}")
             
             # Execute Semgrep with dynamic timeout
             process = self.run_with_process_group_timeout(cmd, timeout=timeout)

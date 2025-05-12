@@ -32,9 +32,17 @@ class StaticAnalyzer:
     def analyze(self, data: Any, language: Optional[str] = None) -> List[Dict[str, Any]]:
         import time
         import psutil
+        import threading
         
         start_time = time.time()
-        memory_before = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+        
+        # Get memory usage with timeout protection
+        memory_before = 0
+        try:
+            memory_before = self._get_process_memory_with_timeout(5)  # 5 second timeout
+            print(f"Initial memory usage: {memory_before:.2f}MB")
+        except Exception as e:
+            print(f"Error getting initial memory usage: {e}")
         
         try:
             findings: List[Dict[str, Any]] = []
@@ -128,7 +136,15 @@ class StaticAnalyzer:
             
             # Log execution metrics
             execution_time = time.time() - start_time
-            memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+            
+            # Get memory usage with timeout protection
+            memory_after = 0
+            try:
+                memory_after = self._get_process_memory_with_timeout(5)  # 5 second timeout
+                print(f"Final memory usage: {memory_after:.2f}MB")
+            except Exception as e:
+                print(f"Error getting final memory usage: {e}")
+                
             memory_used = memory_after - memory_before
             
             print(f"Static analysis completed in {execution_time:.2f}s, memory delta: {memory_used:.2f}MB")
@@ -143,7 +159,15 @@ class StaticAnalyzer:
             
             # Log execution metrics even on error
             execution_time = time.time() - start_time
-            memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+            
+            # Get memory usage with timeout protection
+            memory_after = 0
+            try:
+                memory_after = self._get_process_memory_with_timeout(5)  # 5 second timeout
+                print(f"Final memory usage after error: {memory_after:.2f}MB")
+            except Exception as e:
+                print(f"Error getting final memory usage after error: {e}")
+                
             memory_used = memory_after - memory_before
             
             print(f"Static analysis failed after {execution_time:.2f}s, memory delta: {memory_used:.2f}MB")
@@ -170,7 +194,15 @@ class StaticAnalyzer:
             
             # Log execution metrics even on error
             execution_time = time.time() - start_time
-            memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+            
+            # Get memory usage with timeout protection
+            memory_after = 0
+            try:
+                memory_after = self._get_process_memory_with_timeout(5)  # 5 second timeout
+                print(f"Final memory usage after unexpected error: {memory_after:.2f}MB")
+            except Exception as e:
+                print(f"Error getting final memory usage after unexpected error: {e}")
+                
             memory_used = memory_after - memory_before
             
             print(f"Static analysis failed after {execution_time:.2f}s, memory delta: {memory_used:.2f}MB")
@@ -311,3 +343,76 @@ class StaticAnalyzer:
             "category": "Performance",
             "priority": "Medium"
         }
+        
+    def _get_process_memory_with_timeout(self, timeout_seconds=3):
+        """
+        Get current process memory usage with timeout protection to prevent hangs.
+        
+        This method runs psutil memory measurements in a separate thread with a timeout
+        to prevent system hangs that were occurring after semgrep execution completes.
+        
+        Args:
+            timeout_seconds: Maximum time to wait for psutil call to complete
+            
+        Returns:
+            Memory usage in MB or 0 if timeout occurs
+        """
+        result = [0]  # Default to 0 MB
+        completed = threading.Event()
+        call_id = f"mem-{int(time.time())}"
+        
+        def target():
+            try:
+                # Get the current process with error handling
+                try:
+                    process = psutil.Process()
+                    print(f"[{call_id}] Successfully obtained process object")
+                except Exception as e:
+                    print(f"[{call_id}] Failed to get process object: {e}")
+                    completed.set()
+                    return
+                
+                # Get memory info with error handling
+                try:
+                    mem_info = process.memory_info()
+                    print(f"[{call_id}] Successfully obtained memory info")
+                except Exception as e:
+                    print(f"[{call_id}] Failed to get memory info: {e}")
+                    completed.set()
+                    return
+                
+                # Calculate memory in MB
+                result[0] = mem_info.rss / (1024 * 1024)  # MB
+                print(f"[{call_id}] Memory calculation successful: {result[0]:.2f}MB")
+            except Exception as e:
+                print(f"[{call_id}] Error in psutil memory measurement: {e}")
+            finally:
+                print(f"[{call_id}] Memory measurement thread completing")
+                completed.set()
+                
+        # Create and start worker thread
+        worker = threading.Thread(target=target, name=f"MemoryMeasurement-{call_id}")
+        worker.daemon = True
+        worker.start()
+        
+        # Wait for completion with timeout
+        start_time = time.time()
+        if completed.wait(timeout=timeout_seconds):
+            elapsed = time.time() - start_time
+            print(f"[{call_id}] Memory measurement completed successfully in {elapsed:.2f}s: {result[0]:.2f}MB")
+            return result[0]
+        else:
+            print(f"[{call_id}] Memory measurement timed out after {timeout_seconds}s - this is likely related to the known issue with database item 620")
+            # Log stack trace of the worker thread if possible
+            try:
+                import traceback
+                import sys
+                frame = sys._current_frames().get(worker.ident)
+                if frame:
+                    stack_trace = ''.join(traceback.format_stack(frame))
+                    print(f"[{call_id}] Memory measurement thread stack trace at timeout:\n{stack_trace}")
+            except Exception as e:
+                print(f"[{call_id}] Failed to get thread stack trace: {e}")
+                
+            # Don't try to terminate the thread - just let it run as daemon
+            return 0  # Return 0 MB as a safe default

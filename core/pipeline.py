@@ -363,8 +363,26 @@ class Pipeline:
         item = args_tuple[0] if args_tuple else None
         item_id = item.get('id', 'unknown') if isinstance(item, dict) else 'unknown'
         
-        # Track memory usage before execution
-        memory_before = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+        # Track memory usage before execution with timeout protection
+        self.logger.info(f"About to measure initial memory usage for item {item_id}")
+        memory_before = 0
+        # Track memory usage before execution with comprehensive error handling and timeout protection
+        self.logger.info(f"About to measure initial memory usage for item {item_id}")
+        memory_before = 0
+        try:
+            # Use a separate thread with timeout for psutil call to prevent potential hangs
+            # This is a critical section where hangs have been observed after semgrep execution
+            memory_before = self._get_process_memory_with_timeout(5)  # Increased timeout to 5 seconds
+            if memory_before is None:
+                self.logger.warning(f"Could not get initial memory usage for item {item_id} (timeout)")
+                memory_before = 0
+            else:
+                self.logger.info(f"Successfully measured initial memory usage for item {item_id}: {memory_before:.2f}MB")
+        except Exception as e:
+            self.logger.error(f"Error getting initial memory usage for item {item_id}: {e}", exc_info=True)
+            # Continue execution despite memory measurement failure
+            memory_before = 0
+            
         start_time = time.time()
         
         def target_wrapper():
@@ -396,7 +414,27 @@ class Pipeline:
         
         # Calculate execution metrics
         execution_time = time.time() - start_time
-        memory_after = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+        
+        # Get memory usage after execution with timeout and error handling
+        self.logger.info(f"About to measure final memory usage for item {item_id}")
+        memory_after = 0
+        # Track memory usage after execution with comprehensive error handling and timeout protection
+        self.logger.info(f"About to measure final memory usage for item {item_id}")
+        memory_after = 0
+        try:
+            # Use a separate thread with timeout for psutil call to prevent potential hangs
+            # This is a critical section where hangs have been observed after semgrep execution
+            memory_after = self._get_process_memory_with_timeout(5)  # Increased timeout to 5 seconds
+            if memory_after is None:
+                self.logger.warning(f"Could not get final memory usage for item {item_id} (timeout)")
+                memory_after = 0
+            else:
+                self.logger.info(f"Successfully measured final memory usage for item {item_id}: {memory_after:.2f}MB")
+        except Exception as e:
+            self.logger.error(f"Error getting final memory usage for item {item_id}: {e}", exc_info=True)
+            # Continue execution despite memory measurement failure
+            memory_after = 0
+            
         memory_delta = memory_after - memory_before
         
         # Clean up thread tracking
@@ -444,26 +482,208 @@ class Pipeline:
         """
         Attempt to find and terminate any child processes that might be causing hangs
         """
-        current_process = psutil.Process()
+        # Add diagnostic information to track this call
+        call_id = f"term-{int(time.time())}"
+        self.logger.info(f"[{call_id}] Starting child process termination")
         
-        # Get all child processes
-        children = current_process.children(recursive=True)
+        try:
+            # Get current process with error handling and timeout protection
+            try:
+                current_process = psutil.Process()
+                self.logger.debug(f"[{call_id}] Successfully obtained current process object")
+            except Exception as e:
+                self.logger.error(f"[{call_id}] Failed to get current process object: {e}", exc_info=True)
+                return
+            
+            # Get all child processes with timeout protection
+            children = []
+            child_fetch_completed = threading.Event()
+            
+            def get_children():
+                nonlocal children
+                try:
+                    children = current_process.children(recursive=True)
+                    self.logger.debug(f"[{call_id}] Found {len(children)} child processes")
+                except Exception as e:
+                    self.logger.error(f"[{call_id}] Error getting child processes: {e}", exc_info=True)
+                finally:
+                    child_fetch_completed.set()
+            
+            # Run child process fetching in a separate thread with timeout
+            child_thread = threading.Thread(target=get_children, name=f"GetChildren-{call_id}")
+            child_thread.daemon = True
+            child_thread.start()
+            
+            # Wait up to 5 seconds for child process list
+            if not child_fetch_completed.wait(timeout=5):
+                self.logger.error(f"[{call_id}] Timed out while trying to get child processes")
+                return
+            
+            self.logger.info(f"[{call_id}] Successfully retrieved {len(children)} child processes")
+                
+        except Exception as e:
+            self.logger.warning(f"Error initializing process termination: {e}")
+            return
         
+        # Process each child with timeout protection for each operation
         for child in children:
             try:
-                # Check if it's a semgrep process
-                if 'semgrep' in child.name().lower() or 'python' in child.name().lower():
-                    self.logger.warning(f"Terminating potentially hung child process: {child.pid} ({child.name()})")
+                # Get process name with timeout protection
+                process_name = "unknown"
+                name_completed = threading.Event()
+                
+                def get_name():
+                    nonlocal process_name
+                    try:
+                        process_name = child.name()
+                    except Exception as e:
+                        self.logger.warning(f"Error getting process name for PID {child.pid}: {e}")
+                    finally:
+                        name_completed.set()
+                
+                name_thread = threading.Thread(target=get_name)
+                name_thread.daemon = True
+                name_thread.start()
+                
+                if not name_completed.wait(timeout=2):
+                    self.logger.warning(f"Timed out getting name for process {child.pid}, assuming it needs termination")
+                    process_name = "unknown-timed-out"  # Force termination by assuming it's a hung process
+                
+                # Check if it's a semgrep process or python process
+                if 'semgrep' in process_name.lower() or 'python' in process_name.lower() or process_name == "unknown-timed-out":
+                    self.logger.warning(f"Terminating potentially hung child process: {child.pid} ({process_name})")
                     
-                    # Try graceful termination first
-                    child.terminate()
+                    # Try graceful termination first with timeout protection
+                    try:
+                        child.terminate()
+                    except Exception as e:
+                        self.logger.warning(f"Error terminating process {child.pid}: {e}")
+                        continue
                     
-                    # Wait briefly for termination
-                    gone, still_alive = psutil.wait_procs([child], timeout=2)
+                    # Wait briefly for termination with timeout protection
+                    # Wait for process termination with timeout protection and detailed logging
+                    wait_completed = threading.Event()
+                    wait_result = [None, None]  # [gone, still_alive]
                     
-                    # If still alive, force kill
-                    if still_alive:
-                        self.logger.warning(f"Force killing process {child.pid} that didn't terminate gracefully")
-                        child.kill()
+                    def wait_for_proc():
+                        try:
+                            wait_result[0], wait_result[1] = psutil.wait_procs([child], timeout=2)
+                            self.logger.debug(f"[{call_id}] wait_procs completed for PID {child.pid}")
+                        except Exception as e:
+                            self.logger.error(f"[{call_id}] Error in wait_procs for PID {child.pid}: {e}", exc_info=True)
+                        finally:
+                            wait_completed.set()
+                    
+                    # Run wait_procs in a separate thread with timeout
+                    wait_thread = threading.Thread(target=wait_for_proc, name=f"WaitProc-{child.pid}-{call_id}")
+                    wait_thread.daemon = True
+                    wait_thread.start()
+                    
+                    # Wait for completion with timeout
+                    if not wait_completed.wait(timeout=3):  # Give extra time beyond the internal timeout
+                        self.logger.error(f"[{call_id}] Timed out waiting for process {child.pid} termination")
+                        # Force kill since wait_procs timed out
+                        try:
+                            child.kill()
+                            self.logger.warning(f"[{call_id}] Force killed process {child.pid} after wait_procs timeout")
+                        except Exception as e:
+                            self.logger.error(f"[{call_id}] Error force killing process {child.pid} after wait_procs timeout: {e}")
+                    else:
+                        # Check if process is still alive
+                        gone, still_alive = wait_result
+                        if still_alive:
+                            self.logger.warning(f"[{call_id}] Force killing process {child.pid} that didn't terminate gracefully")
+                            try:
+                                child.kill()
+                                self.logger.info(f"[{call_id}] Successfully force killed process {child.pid}")
+                            except Exception as e:
+                                self.logger.error(f"[{call_id}] Error force killing process {child.pid}: {e}", exc_info=True)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                self.logger.warning(f"Error terminating process: {e}")
+                self.logger.warning(f"Error accessing process {getattr(child, 'pid', 'unknown')}: {e}")
+            except Exception as e:
+                self.logger.warning(f"Unexpected error processing child process: {e}")
+                
+    def _get_process_memory_with_timeout(self, timeout_seconds=3):
+        """
+        Get current process memory usage with timeout protection to prevent hangs.
+        
+        This method runs psutil memory measurements in a separate thread with a timeout
+        to prevent system hangs that were occurring after semgrep execution completes
+        for database item 620. The root cause was related to psutil calls getting stuck
+        when measuring memory usage.
+        
+        Args:
+            timeout_seconds: Maximum time to wait for psutil call to complete
+            
+        Returns:
+            Memory usage in MB or None if timeout occurs
+        """
+        result = [None]
+        completed = threading.Event()
+        thread_id = threading.get_ident()
+        
+        # Add diagnostic information to track this call
+        call_id = f"mem-{thread_id}-{int(time.time())}"
+        self.logger.info(f"[{call_id}] Starting memory measurement with {timeout_seconds}s timeout")
+        
+        def target():
+            try:
+                # Get the current process with error handling
+                try:
+                    process = psutil.Process()
+                    self.logger.debug(f"[{call_id}] Successfully obtained process object")
+                except Exception as e:
+                    self.logger.error(f"[{call_id}] Failed to get process object: {e}")
+                    result[0] = None
+                    completed.set()
+                    return
+                
+                # Get memory info with error handling
+                try:
+                    mem_info = process.memory_info()
+                    self.logger.debug(f"[{call_id}] Successfully obtained memory info")
+                except Exception as e:
+                    self.logger.error(f"[{call_id}] Failed to get memory info: {e}")
+                    result[0] = None
+                    completed.set()
+                    return
+                
+                # Calculate memory in MB
+                result[0] = mem_info.rss / (1024 * 1024)  # MB
+                self.logger.debug(f"[{call_id}] Memory calculation successful: {result[0]:.2f}MB")
+            except Exception as e:
+                self.logger.error(f"[{call_id}] Error in psutil memory measurement: {e}", exc_info=True)
+                result[0] = None
+            finally:
+                self.logger.debug(f"[{call_id}] Memory measurement thread completing")
+                completed.set()
+                
+        # Create and start worker thread
+        worker = threading.Thread(target=target, name=f"MemoryMeasurement-{call_id}")
+        worker.daemon = True
+        worker.start()
+        
+        # Wait for completion with timeout
+        start_time = time.time()
+        if completed.wait(timeout=timeout_seconds):
+            elapsed = time.time() - start_time
+            if result[0] is not None:
+                self.logger.info(f"[{call_id}] Memory measurement completed successfully in {elapsed:.2f}s: {result[0]:.2f}MB")
+            else:
+                self.logger.warning(f"[{call_id}] Memory measurement failed but did not hang (completed in {elapsed:.2f}s)")
+            return result[0]
+        else:
+            self.logger.error(f"[{call_id}] Memory measurement timed out after {timeout_seconds}s - this is the known issue with database item 620")
+            # Log stack trace of the worker thread if possible
+            try:
+                import traceback
+                import sys
+                frame = sys._current_frames().get(worker.ident)
+                if frame:
+                    stack_trace = ''.join(traceback.format_stack(frame))
+                    self.logger.error(f"[{call_id}] Memory measurement thread stack trace at timeout:\n{stack_trace}")
+            except Exception as e:
+                self.logger.error(f"[{call_id}] Failed to get thread stack trace: {e}")
+                
+            # Don't try to terminate the thread - just let it run as daemon
+            return None

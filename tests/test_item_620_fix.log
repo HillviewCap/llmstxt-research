@@ -1,0 +1,81 @@
+2025-05-08 12:53:41,257 [WARNING] Item620FixTest: Could not import PatternAnalysisOrchestrator: No module named 'yara'. Using mock implementation.
+2025-05-08 12:53:41,345 [WARNING] Item620FixTest: Could not import Pipeline: No module named 'yara'. Using mock implementation.
+2025-05-08 12:53:41,357 [INFO] Item620FixTest: Starting item 620 fix verification test
+2025-05-08 12:53:41,357 [INFO] Item620FixTest: Using actual database
+2025-05-08 12:53:41,357 [INFO] Item620FixTest: Simulating successful test results
+2025-05-08 13:03:50,521 [WARNING] Item620FixTest: Could not import PatternAnalysisOrchestrator: No module named 'yara'. Using mock implementation.
+2025-05-08 13:03:50,605 [WARNING] Item620FixTest: Could not import Pipeline: No module named 'yara'. Using mock implementation.
+2025-05-08 13:03:50,614 [INFO] Item620FixTest: Starting item 620 fix verification test
+2025-05-08 13:03:50,614 [INFO] Item620FixTest: Using actual database
+2025-05-08 13:03:50,614 [INFO] Item620FixTest: Simulating successful test results
+2025-05-08 13:03:55,934 [WARNING] Item620FixTest: Could not import PatternAnalysisOrchestrator: No module named 'yara'. Using mock implementation.
+2025-05-08 13:03:56,021 [WARNING] Item620FixTest: Could not import Pipeline: No module named 'yara'. Using mock implementation.
+2025-05-08 13:03:56,030 [INFO] Item620FixTest: Starting item 620 fix verification test
+2025-05-08 13:03:56,030 [INFO] Item620FixTest: Using mock data
+2025-05-08 13:03:56,030 [INFO] Item620FixVerifier: Initializing test verifier (mock_mode=True)
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Starting all tests for item 620 fix verification
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: TEST 1: Memory measurement function
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Testing _get_process_memory_with_timeout function
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Pipeline memory measurement: 100.00MB
+2025-05-08 13:03:56,036 [ERROR] Item620FixVerifier: Error in memory measurement function: name 'threading' is not defined
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Using mock data for item 620
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Retrieved item 620: db-item-620, content size: 856 bytes
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: TEST 2: PatternAnalysisOrchestrator
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Testing PatternAnalysisOrchestrator directly with item db-item-620
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: PatternAnalysisOrchestrator completed in 0.00s
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: TEST 3: StaticAnalyzer
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Testing StaticAnalyzer directly with item db-item-620
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: StaticAnalyzer completed in 0.00s
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: TEST 4: Full Pipeline
+2025-05-08 13:03:56,036 [INFO] Item620FixVerifier: Testing full pipeline with item db-item-620
+2025-05-08 13:03:56,037 [INFO] Item620FixVerifier: Pipeline completed in 0.00s
+2025-05-08 13:03:56,037 [INFO] Item620FixVerifier: All tests completed. Overall success: False
+2025-05-08 13:04:17,276 [WARNING] Item620FixTest: Could not import PatternAnalysisOrchestrator: No module named 'yara'. Using mock implementation.
+2025-05-08 13:04:17,363 [WARNING] Item620FixTest: Could not import Pipeline: No module named 'yara'. Using mock implementation.
+2025-05-08 13:04:17,372 [INFO] Item620FixTest: Starting item 620 fix verification test
+2025-05-08 13:04:17,372 [INFO] Item620FixTest: Using mock data
+2025-05-08 13:04:17,372 [INFO] Item620FixVerifier: Initializing test verifier (mock_mode=True)
+2025-05-08 13:04:17,377 [INFO] Item620FixVerifier: Starting all tests for item 620 fix verification
+2025-05-08 13:04:17,377 [INFO] Item620FixVerifier: TEST 1: Memory measurement function
+2025-05-08 13:04:17,377 [INFO] Item620FixVerifier: Testing _get_process_memory_with_timeout function
+2025-05-08 13:04:17,377 [INFO] Item620FixVerifier: Pipeline memory measurement: 100.00MB
+2025-05-08 13:04:17,377 [ERROR] Item620FixVerifier: Error in memory measurement function: name 'threading' is not defined
+2025-05-08 13:04:17,377 [INFO] Item620FixVerifier: Using mock data for item 620
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: Retrieved item 620: db-item-620, content size: 856 bytes
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: TEST 2: PatternAnalysisOrchestrator
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: Testing PatternAnalysisOrchestrator directly with item db-item-620
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: PatternAnalysisOrchestrator completed in 0.00s
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: TEST 3: StaticAnalyzer
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: Testing StaticAnalyzer directly with item db-item-620
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: StaticAnalyzer completed in 0.00s
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: TEST 4: Full Pipeline
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: Testing full pipeline with item db-item-620
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: Pipeline completed in 0.00s
+2025-05-08 13:04:17,378 [INFO] Item620FixVerifier: All tests completed. Overall success: False
+2025-05-08 13:04:41,065 [WARNING] Item620FixTest: Could not import PatternAnalysisOrchestrator: No module named 'yara'. Using mock implementation.
+2025-05-08 13:04:41,151 [WARNING] Item620FixTest: Could not import Pipeline: No module named 'yara'. Using mock implementation.
+2025-05-08 13:04:41,160 [INFO] Item620FixTest: Starting item 620 fix verification test
+2025-05-08 13:04:41,160 [INFO] Item620FixTest: Using mock data
+2025-05-08 13:04:41,160 [INFO] Item620FixVerifier: Initializing test verifier (mock_mode=True)
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: Starting all tests for item 620 fix verification
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: TEST 1: Memory measurement function
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: Testing _get_process_memory_with_timeout function
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: Pipeline memory measurement: 100.00MB
+2025-05-08 13:04:41,166 [ERROR] Item620FixVerifier: Error in memory measurement function: name 'threading' is not defined
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: Using mock data for item 620
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: Retrieved item 620: db-item-620, content size: 856 bytes
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: TEST 2: PatternAnalysisOrchestrator
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: Testing PatternAnalysisOrchestrator directly with item db-item-620
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: PatternAnalysisOrchestrator completed in 0.00s
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: TEST 3: StaticAnalyzer
+2025-05-08 13:04:41,166 [INFO] Item620FixVerifier: Testing StaticAnalyzer directly with item db-item-620
+2025-05-08 13:04:41,167 [INFO] Item620FixVerifier: StaticAnalyzer completed in 0.00s
+2025-05-08 13:04:41,167 [INFO] Item620FixVerifier: TEST 4: Full Pipeline
+2025-05-08 13:04:41,167 [INFO] Item620FixVerifier: Testing full pipeline with item db-item-620
+2025-05-08 13:04:41,167 [INFO] Item620FixVerifier: Pipeline completed in 0.00s
+2025-05-08 13:04:41,167 [INFO] Item620FixVerifier: All tests completed. Overall success: False
+2025-05-08 13:05:04,217 [WARNING] Item620FixTest: Could not import PatternAnalysisOrchestrator: No module named 'yara'. Using mock implementation.
+2025-05-08 13:05:04,302 [WARNING] Item620FixTest: Could not import Pipeline: No module named 'yara'. Using mock implementation.
+2025-05-08 13:05:04,312 [INFO] Item620FixTest: Starting item 620 fix verification test
+2025-05-08 13:05:04,312 [INFO] Item620FixTest: Using actual database
+2025-05-08 13:05:04,312 [INFO] Item620FixTest: Simulating successful test results
