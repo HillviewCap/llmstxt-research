@@ -281,42 +281,40 @@ class MetricsCollector:
                 
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_findings'")
                 has_findings_table = cursor.fetchone() is not None
-            
-            if has_analysis_table:
-                # Count total analyses
-                cursor.execute("SELECT COUNT(*) FROM security_analysis_results")
-                metrics["total_analyses"] = cursor.fetchone()[0]
                 
-                # Count analyses in the last 24 hours
-                yesterday = (datetime.now() - timedelta(days=1)).isoformat()
-                cursor.execute("SELECT COUNT(*) FROM security_analysis_results WHERE analysis_timestamp > ?", (yesterday,))
-                metrics["analyses_last_24h"] = cursor.fetchone()[0]
+                if has_analysis_table:
+                    # Count total analyses
+                    cursor.execute("SELECT COUNT(*) FROM security_analysis_results")
+                    metrics["total_analyses"] = cursor.fetchone()[0]
+                    
+                    # Count analyses in the last 24 hours
+                    yesterday = (datetime.now() - timedelta(days=1)).isoformat()
+                    cursor.execute("SELECT COUNT(*) FROM security_analysis_results WHERE analysis_timestamp > ?", (yesterday,))
+                    metrics["analyses_last_24h"] = cursor.fetchone()[0]
+                    
+                    # Count unique files analyzed
+                    cursor.execute("SELECT COUNT(DISTINCT url_id) FROM security_analysis_results")
+                    metrics["unique_files_analyzed"] = cursor.fetchone()[0]
+                else:
+                    logger.warning("Table 'security_analysis_results' does not exist. Skipping related metrics.")
+                    metrics["total_analyses"] = 0
+                    metrics["analyses_last_24h"] = 0
+                    metrics["unique_files_analyzed"] = 0
                 
-                # Count unique files analyzed (using url_id as proxy since file_path doesn't exist)
-                cursor.execute("SELECT COUNT(DISTINCT url_id) FROM security_analysis_results")
-                metrics["unique_files_analyzed"] = cursor.fetchone()[0]
-            else:
-                self.logger.warning("Table 'security_analysis_results' does not exist. Skipping related metrics.")
-                metrics["total_analyses"] = 0
-                metrics["analyses_last_24h"] = 0
-                metrics["unique_files_analyzed"] = 0
-            
-            if has_findings_table:
-                # Count findings by severity
-                cursor.execute("""
-                    SELECT severity, COUNT(*)
-                    FROM security_findings
-                    GROUP BY severity
-                """)
-                severity_counts = {}
-                for severity, count in cursor.fetchall():
-                    severity_counts[severity] = count
-                metrics["findings_by_severity"] = severity_counts
-            else:
-                self.logger.warning("Table 'security_findings' does not exist. Skipping related metrics.")
-                metrics["findings_by_severity"] = {}
-            
-                # No need to close connection - handled by context manager
+                if has_findings_table:
+                    # Count findings by severity
+                    cursor.execute("""
+                        SELECT severity, COUNT(*)
+                        FROM security_findings
+                        GROUP BY severity
+                    """)
+                    severity_counts = {}
+                    for severity, count in cursor.fetchall():
+                        severity_counts[severity] = count
+                    metrics["findings_by_severity"] = severity_counts
+                else:
+                    logger.warning("Table 'security_findings' does not exist. Skipping related metrics.")
+                    metrics["findings_by_severity"] = {}
             
         except sqlite3.Error as e:
             logger.error(f"Error collecting usage metrics from database: {e}")
@@ -382,65 +380,63 @@ class MetricsCollector:
                 
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_analysis_results'")
                 has_analysis_table = cursor.fetchone() is not None
-            
-            if has_findings_table:
-                # Count findings by type
-                cursor.execute("""
-                    SELECT finding_type, COUNT(*)
-                    FROM security_findings
-                    GROUP BY finding_type
-                """)
-                type_counts = {}
-                for finding_type, count in cursor.fetchall():
-                    type_counts[finding_type] = count
-                metrics["findings_by_type"] = type_counts
                 
-                # Count findings by analyzer (if column exists)
-                try:
+                if has_findings_table:
+                    # Count findings by type
                     cursor.execute("""
-                        SELECT analysis_id, COUNT(*)
+                        SELECT finding_type, COUNT(*)
                         FROM security_findings
-                        GROUP BY analysis_id
+                        GROUP BY finding_type
                     """)
-                    analyzer_counts = {}
-                    for analyzer, count in cursor.fetchall():
-                        analyzer_counts[f"analysis_{analyzer}"] = count
-                    metrics["findings_by_analyzer"] = analyzer_counts
-                except sqlite3.OperationalError:
-                    self.logger.warning("Column 'analyzer' does not exist in security_findings table")
-                    metrics["findings_by_analyzer"] = {}
-            else:
-                self.logger.warning("Table 'security_findings' does not exist. Skipping related metrics.")
-                metrics["findings_by_type"] = {}
-                metrics["findings_by_analyzer"] = {}
-            
-            if has_analysis_table:
-                # Get average analysis time (using a different approach since duration might not exist)
-                try:
-                    cursor.execute("""
-                        SELECT AVG(julianday(analysis_timestamp) - julianday(analysis_timestamp))
-                        FROM security_analysis_results
-                    """)
-                    avg_duration = cursor.fetchone()[0]
-                    metrics["avg_analysis_duration"] = avg_duration if avg_duration else 0
+                    type_counts = {}
+                    for finding_type, count in cursor.fetchall():
+                        type_counts[finding_type] = count
+                    metrics["findings_by_type"] = type_counts
                     
-                    # Get max analysis time
-                    cursor.execute("""
-                        SELECT MAX(julianday(analysis_timestamp) - julianday(analysis_timestamp))
-                        FROM security_analysis_results
-                    """)
-                    max_duration = cursor.fetchone()[0]
-                    metrics["max_analysis_duration"] = max_duration if max_duration else 0
-                except sqlite3.OperationalError:
-                    self.logger.warning("Could not calculate duration metrics")
+                    # Count findings by analyzer (if column exists)
+                    try:
+                        cursor.execute("""
+                            SELECT analysis_id, COUNT(*)
+                            FROM security_findings
+                            GROUP BY analysis_id
+                        """)
+                        analyzer_counts = {}
+                        for analyzer, count in cursor.fetchall():
+                            analyzer_counts[f"analysis_{analyzer}"] = count
+                        metrics["findings_by_analyzer"] = analyzer_counts
+                    except sqlite3.OperationalError:
+                        logger.warning("Column 'analyzer' does not exist in security_findings table")
+                        metrics["findings_by_analyzer"] = {}
+                else:
+                    logger.warning("Table 'security_findings' does not exist. Skipping related metrics.")
+                    metrics["findings_by_type"] = {}
+                    metrics["findings_by_analyzer"] = {}
+                
+                if has_analysis_table:
+                    # Get average analysis time
+                    try:
+                        cursor.execute("""
+                            SELECT AVG(julianday(analysis_timestamp) - julianday(analysis_timestamp))
+                            FROM security_analysis_results
+                        """)
+                        avg_duration = cursor.fetchone()[0]
+                        metrics["avg_analysis_duration"] = avg_duration if avg_duration else 0
+                        
+                        # Get max analysis time
+                        cursor.execute("""
+                            SELECT MAX(julianday(analysis_timestamp) - julianday(analysis_timestamp))
+                            FROM security_analysis_results
+                        """)
+                        max_duration = cursor.fetchone()[0]
+                        metrics["max_analysis_duration"] = max_duration if max_duration else 0
+                    except sqlite3.OperationalError:
+                        logger.warning("Could not calculate duration metrics")
+                        metrics["avg_analysis_duration"] = 0
+                        metrics["max_analysis_duration"] = 0
+                else:
+                    logger.warning("Table 'security_analysis_results' does not exist. Skipping related metrics.")
                     metrics["avg_analysis_duration"] = 0
                     metrics["max_analysis_duration"] = 0
-            else:
-                self.logger.warning("Table 'security_analysis_results' does not exist. Skipping related metrics.")
-                metrics["avg_analysis_duration"] = 0
-                metrics["max_analysis_duration"] = 0
-            
-                # No need to close connection - handled by context manager
             
         except sqlite3.Error as e:
             logger.error(f"Error collecting analysis metrics from database: {e}")
@@ -621,61 +617,59 @@ class MetricsCollector:
             with self._get_db_connection() as conn:
                 conn.row_factory = sqlite3.Row  # Enable row factory for named columns
                 cursor = conn.cursor()
-            
-            # Build query
-            query = "SELECT * FROM metrics"
-            params = []
-            
-            conditions = []
-            if metric_type:
-                conditions.append("metric_type = ?")
-                params.append(metric_type)
-            
-            if start_time:
-                conditions.append("timestamp >= ?")
-                params.append(start_time)
-            
-            if end_time:
-                conditions.append("timestamp <= ?")
-                params.append(end_time)
-            
-            if conditions:
-                query += " WHERE " + " AND ".join(conditions)
-            
-            # Add order by timestamp
-            query += " ORDER BY timestamp"
-            
-            # Execute query
-            cursor.execute(query, params)
-            
-            # Process results
-            for row in cursor:
-                row_dict = dict(row)
-                metric_type = row_dict["metric_type"]
-                metric_name = row_dict["metric_name"]
                 
-                # Initialize metric type if not exists
-                if metric_type not in metrics["metrics"]:
-                    metrics["metrics"][metric_type] = {}
+                # Build query
+                query = "SELECT * FROM metrics"
+                params = []
                 
-                # Initialize metric name if not exists
-                if metric_name not in metrics["metrics"][metric_type]:
-                    metrics["metrics"][metric_type][metric_name] = []
+                conditions = []
+                if metric_type:
+                    conditions.append("metric_type = ?")
+                    params.append(metric_type)
                 
-                # Add metric value or data
-                if row_dict["metric_value"] is not None:
-                    value = row_dict["metric_value"]
-                else:
-                    # Parse JSON data
-                    value = json.loads(row_dict["metric_data"]) if row_dict["metric_data"] else None
+                if start_time:
+                    conditions.append("timestamp >= ?")
+                    params.append(start_time)
                 
-                # Add to metrics list
-                metrics["metrics"][metric_type][metric_name].append({
-                    "timestamp": row_dict["timestamp"],
-                    "value": value
-                })
-            
-                # No need to close connection - handled by context manager
+                if end_time:
+                    conditions.append("timestamp <= ?")
+                    params.append(end_time)
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                # Add order by timestamp
+                query += " ORDER BY timestamp"
+                
+                # Execute query
+                cursor.execute(query, params)
+                
+                # Process results
+                for row in cursor:
+                    row_dict = dict(row)
+                    metric_type = row_dict["metric_type"]
+                    metric_name = row_dict["metric_name"]
+                    
+                    # Initialize metric type if not exists
+                    if metric_type not in metrics["metrics"]:
+                        metrics["metrics"][metric_type] = {}
+                    
+                    # Initialize metric name if not exists
+                    if metric_name not in metrics["metrics"][metric_type]:
+                        metrics["metrics"][metric_type][metric_name] = []
+                    
+                    # Add metric value or data
+                    if row_dict["metric_value"] is not None:
+                        value = row_dict["metric_value"]
+                    else:
+                        # Parse JSON data
+                        value = json.loads(row_dict["metric_data"]) if row_dict["metric_data"] else None
+                    
+                    # Add to metrics list
+                    metrics["metrics"][metric_type][metric_name].append({
+                        "timestamp": row_dict["timestamp"],
+                        "value": value
+                    })
             
         except sqlite3.Error as e:
             logger.error(f"Error retrieving metrics from database: {e}")
