@@ -82,7 +82,11 @@ class ContentStorage:
                             url_id=url_record.id,
                             processed_content_id=processed_content_record.id,
                             language=cb_data.get("language"),
-                            content=cb_data.get("code")
+                            content=cb_data.get("code"),
+                            line_start=cb_data.get("line_start"),
+                            line_end=cb_data.get("line_end"),
+                            context_before=cb_data.get("context_before"),
+                            context_after=cb_data.get("context_after")
                         )
                         session.add(code_block_record)
 

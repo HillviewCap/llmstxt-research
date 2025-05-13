@@ -1,3 +1,4 @@
+import os
 from typing import List, Dict, Any, Optional
 
 from ..database.connector import DatabaseConnector
@@ -102,13 +103,24 @@ class ContentProcessor:
         source_url = item.get("source")
         raw_content = item.get("content") # May or may not be pre-fetched
 
-        if not source_url or not isinstance(source_url, str) or not source_url.startswith('http'):
-            print(f"Invalid or missing 'source' URL in item: {item.get('id', 'unknown')}")
+        if not source_url or not isinstance(source_url, str):
+            print(f"Invalid or missing source in item: {item.get('id', 'unknown')}")
             item['parsed_content'] = None
-            item['processing_error'] = "Invalid source URL"
+            item['processing_error'] = "Invalid source"
             return item
 
-        print(f"Processing pipeline item, source URL: {source_url}")
+        # Handle local file paths
+        if os.path.exists(source_url):
+            try:
+                with open(source_url, 'r', encoding='utf-8') as f:
+                    raw_content = f.read()
+            except Exception as e:
+                print(f"Error reading local file {source_url}: {e}")
+                item['parsed_content'] = None
+                item['processing_error'] = f"Failed to read local file: {str(e)}"
+                return item
+
+        print(f"Processing pipeline item, source: {source_url}")
         try:
             # If content is already provided in the item, use it. Otherwise, it will be fetched.
             parsed_data = self.process_single_url(url=source_url, raw_content=raw_content)

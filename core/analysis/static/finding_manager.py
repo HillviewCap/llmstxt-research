@@ -10,7 +10,7 @@ class FindingManager:
 
     def normalize_finding(self, finding: Dict[str, Any]) -> Dict[str, Any]:
         # Standardize finding fields
-        return {
+        normalized = {
             "rule_id": finding.get("rule_id"),
             "path": finding.get("path"),
             "start": finding.get("start"),
@@ -20,6 +20,12 @@ class FindingManager:
             "priority": finding.get("priority", "Medium"),
             "severity": self.classify_severity(finding),
         }
+        
+        # Include code block ID if present
+        if "code_block_id" in finding:
+            normalized["code_block_id"] = finding["code_block_id"]
+            
+        return normalized
 
     def classify_severity(self, finding: Dict[str, Any]) -> str:
         # Map priority/category to severity

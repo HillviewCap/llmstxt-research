@@ -1,0 +1,64 @@
+# Test Content with Code Blocks
+
+This is a test document containing multiple code blocks for testing the extraction and analysis pipeline.
+
+## Python Example
+
+Here's a Python code block:
+
+```python
+def calculate_sum(items):
+    total = 0
+    for item in items:
+        total += item
+    return total
+
+# Test the function
+numbers = [1, 2, 3, 4, 5]
+result = calculate_sum(numbers)
+print(f"Sum: {result}")
+```
+
+## JavaScript Example
+
+Here's a JavaScript code block:
+
+```javascript
+function validateInput(value) {
+    if (typeof value !== 'string') {
+        throw new Error('Input must be a string');
+    }
+    
+    // Dangerous: Using eval (this should trigger Semgrep)
+    return eval(value);
+}
+
+// Test the function
+try {
+    const result = validateInput("2 + 2");
+    console.log(result);
+} catch (error) {
+    console.error(error);
+}
+```
+
+## SQL Example
+
+Here's an SQL code block that might contain sensitive information:
+
+```sql
+-- Connect to the main database
+SELECT username, password_hash, email 
+FROM users 
+WHERE role = 'admin';
+
+-- Update user credentials
+UPDATE users 
+SET api_key = 'sk_live_abcdef123456'
+WHERE username = 'admin';
+```
+
+This document contains various code blocks that should trigger different types of analysis:
+1. Static analysis (Semgrep) should detect the unsafe `eval()` usage
+2. Pattern analysis should detect potential credential patterns
+3. The code blocks should be properly extracted with line numbers and context

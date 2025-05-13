@@ -2,10 +2,13 @@ import os
 import time
 import logging
 from typing import List, Dict, Any, Optional
+from sqlalchemy.orm import Session
 
 from .semgrep_runner import SemgrepRunner, SemgrepRunnerError
 from .rule_manager import RuleManager, RuleManagerError
 from .finding_manager import FindingManager, FindingManagerError
+from core.utils.db_utils import get_code_blocks_by_content_id
+from core.database.schema import CodeBlock
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -33,6 +36,54 @@ class StaticAnalyzer:
             registry_rulesets=self.registry_rulesets
         )
         self.finding_manager = FindingManager()
+        self.db_session: Optional[Session] = None
+
+    def set_db_session(self, session: Session):
+        """Set the database session for code block analysis."""
+        self.db_session = session
+
+    def analyze_code_blocks(self, processed_content_id: int) -> List[Dict[str, Any]]:
+        """Analyze all code blocks for a given processed content."""
+        if not self.db_session:
+            raise StaticAnalyzerError("Database session not set. Call set_db_session() first.")
+
+        code_blocks = get_code_blocks_by_content_id(self.db_session, processed_content_id)
+        if not code_blocks:
+            logger.warning(f"No code blocks found for content ID: {processed_content_id}")
+            return []
+
+        all_findings = []
+        for block in code_blocks:
+            findings = self.analyze_single_block(block)
+            all_findings.extend(findings)
+
+        return all_findings
+
+    def analyze_single_block(self, block: CodeBlock) -> List[Dict[str, Any]]:
+        """Analyze a single code block and adjust finding locations."""
+        if not block.content or not block.language:
+            logger.warning(f"Skipping code block {block.id}: Missing content or language")
+            return []
+
+        # Run semgrep on the block
+        findings = self.semgrep_runner.run(content=block.content, language=block.language)
+
+        # Adjust line numbers and add block reference
+        adjusted_findings = []
+        for finding in findings:
+            # Only adjust if we have line_start information
+            if block.line_start is not None:
+                line_offset = block.line_start - 1  # Convert to 0-based for calculation
+                if finding.get("start", {}).get("line"):
+                    finding["start"]["line"] += line_offset
+                if finding.get("end", {}).get("line"):
+                    finding["end"]["line"] += line_offset
+
+            # Add code block reference
+            finding["code_block_id"] = block.id
+            adjusted_findings.append(finding)
+
+        return adjusted_findings
 
     def analyze(self, data: Any, language: Optional[str] = None) -> List[Dict[str, Any]]:
         import time
@@ -46,10 +97,55 @@ class StaticAnalyzer:
 
             if isinstance(data, dict):
                 content_to_scan = data.get('content')
-                # Use language from dict first, fallback to method's language parameter
-                lang_for_scan = data.get('language', language)
+                item_id = data.get('id', 'unknown')
 
-                item_id = data.get('id', 'unknown') # For logging
+                if not content_to_scan:
+                    raise StaticAnalyzerError(
+                        f"Input dictionary for analysis is missing 'content' key. ID: {item_id}"
+                    )
+
+                # Parse markdown and extract code blocks
+                from core.content.markdown_parser import MarkdownParser
+                parser = MarkdownParser()
+                parsed_data = parser.parse(content_to_scan)
+                code_blocks = parsed_data.get('code_blocks', [])
+
+                # Log code block analysis
+                logger.info(f"Found {len(code_blocks)} code blocks to analyze")
+
+                # Analyze each code block with its specific language
+                for i, block in enumerate(code_blocks, 1):
+                    code_content = block.get('code')
+                    block_language = block.get('language')
+                    line_start = block.get('line_start', 1)
+                    
+                    if code_content and block_language:
+                        logger.info(f"Analyzing code block {i}/{len(code_blocks)} with language {block_language}")
+                        
+                        # Skip analysis for unsupported languages
+                        if block_language.lower() not in [lang.lower() for lang in self.semgrep_runner.SUPPORTED_LANGUAGES]:
+                            logger.info(f"Skipping unsupported language: {block_language}")
+                            continue
+
+                        # Run semgrep on the block
+                        block_findings = self.semgrep_runner.run(content=code_content, language=block_language)
+                        
+                        # Adjust line numbers to match original document
+                        for finding in block_findings:
+                            if finding.get('start', {}).get('line'):
+                                finding['start']['line'] += line_start - 1
+                            if finding.get('end', {}).get('line'):
+                                finding['end']['line'] += line_start - 1
+                            
+                            # Add code block context to finding
+                            finding['code_block'] = {
+                                'index': i,
+                                'language': block_language,
+                                'line_start': line_start,
+                                'line_end': block.get('line_end')
+                            }
+                        
+                        findings.extend(block_findings)
                 
                 # Log memory usage and content size for monitoring
                 content_size = len(content_to_scan) if content_to_scan else 0
@@ -65,83 +161,6 @@ class StaticAnalyzer:
                 if content_to_scan and content_lines > self.max_content_lines:
                     print(f"WARNING: Item {item_id}: Content line count ({content_lines}) exceeds maximum allowed lines ({self.max_content_lines})")
                     return [self._create_line_limit_finding(item_id, content_lines, self.max_content_lines)]
-
-                if content_to_scan and lang_for_scan:
-                    # Check if the language is supported by semgrep
-                    supported_languages = [
-                        "apex", "bash", "c", "c#", "c++", "cairo", "circom", "clojure",
-                        "cpp", "csharp", "dart", "docker", "dockerfile", "elixir", "ex",
-                        "generic", "go", "golang", "hack", "hcl", "html", "java",
-                        "javascript", "js", "json", "jsonnet", "julia", "kotlin", "kt",
-                        "lisp", "lua", "move_on_aptos", "move_on_sui", "none", "ocaml",
-                        "php", "promql", "proto", "proto3", "protobuf", "py", "python",
-                        "python2", "python3", "ql", "r", "regex", "ruby", "rust", "scala",
-                        "scheme", "sh", "sol", "solidity", "swift", "terraform", "tf",
-                        "ts", "typescript", "vue", "xml", "yaml"
-                    ]
-                    
-                    # If language is markdown, use 'generic' instead
-                    effective_language = lang_for_scan
-                    if lang_for_scan.lower() == 'markdown' or lang_for_scan.lower() == 'md':
-                        effective_language = 'generic'
-                        logger.info(f"Converting markdown language to 'generic' for semgrep compatibility. ID: {item_id}")
-                    
-                    # If language is not supported, use 'generic'
-                    if effective_language.lower() not in [lang.lower() for lang in supported_languages]:
-                        logger.info(f"Language '{lang_for_scan}' not supported by semgrep, using 'generic' instead. ID: {item_id}")
-                        effective_language = 'generic'
-                    
-                    # For generic content, check complexity before running semgrep
-                    if effective_language == 'generic' and self._is_complex_generic_content(content_to_scan):
-                        logger.warning(f"Item {item_id}: Complex generic content detected, using alternative analysis")
-                        findings = self._analyze_complex_generic_content(content_to_scan, item_id)
-                    else:
-                        logger.info(f"Static analyzing in-memory content (lang: {effective_language}). ID: {item_id}")
-                        
-                        # Log semgrep execution start
-                        logger.info(f"Starting semgrep execution for ID: {item_id}")
-                        
-                        # Check for semgrep processes before execution
-                        self._log_semgrep_processes("before")
-                        
-                        # Run semgrep
-                        findings = self.semgrep_runner.run(content=content_to_scan, language=effective_language)
-                        
-                        # Check for semgrep processes after execution
-                        self._log_semgrep_processes("after")
-                        
-                        logger.info(f"Completed semgrep execution for ID: {item_id}")
-                elif content_to_scan and not lang_for_scan:
-                    # Default to generic for content without a specified language
-                    logger.info(f"No language specified for content analysis, using 'generic'. ID: {item_id}")
-                    
-                    # Check complexity before running semgrep
-                    if self._is_complex_generic_content(content_to_scan):
-                        logger.warning(f"Item {item_id}: Complex generic content detected, using alternative analysis")
-                        findings = self._analyze_complex_generic_content(content_to_scan, item_id)
-                    else:
-                        # Log semgrep execution start
-                        logger.info(f"Starting semgrep execution for generic content. ID: {item_id}")
-                        
-                        # Check for semgrep processes before execution
-                        self._log_semgrep_processes("before")
-                        
-                        findings = self.semgrep_runner.run(content=content_to_scan, language='generic')
-                        
-                        # Check for semgrep processes after execution
-                        self._log_semgrep_processes("after")
-                        
-                        logger.info(f"Completed semgrep execution for generic content. ID: {item_id}")
-                elif not content_to_scan:
-                    raise StaticAnalyzerError(
-                        f"Input dictionary for analysis is missing 'content' key. ID: {item_id}"
-                    )
-                else:
-                    # This case implies data is a dict, but not actionable (e.g. empty content after checks)
-                    # This path should ideally not be hit if the above conditions are exhaustive.
-                    logger.warning(f"Static analysis received a dictionary that could not be processed. ID: {item_id}, Keys: {list(data.keys())}")
-                    # Default to empty findings for this case, or raise specific error if preferred.
-                    # Given the checks, this implies an unexpected dict structure or empty content that wasn't caught.
 
             elif isinstance(data, str):  # Assumed to be a file path
                 target_path = data

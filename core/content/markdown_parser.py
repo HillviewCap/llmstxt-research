@@ -10,8 +10,8 @@ class MarkdownParseError(Exception):
 
 class MarkdownParser:
     def __init__(self):
-        # Initialize mistune. No special plugins needed for basic component extraction.
-        self._md = mistune.create_markdown()
+        # Initialize mistune in raw AST mode for code block extraction
+        self._md = mistune.create_markdown(renderer=None)
 
     def parse(self, text: str) -> Dict[str, Any]:
         """
@@ -23,15 +23,24 @@ class MarkdownParser:
             # Use md.parse() to get the AST
             ast = self._md.parse(text)
             if ast is None: # Handle cases where parsing might return None for empty/invalid input
-                ast = []
-            return self._extract_components(ast)
+                ast_nodes = []
+            else:
+                # Extract the nodes list from the AST tuple
+                ast_nodes = ast[0] if isinstance(ast, tuple) and len(ast) > 0 else ast
+            
+            print("Mistune AST:", ast)  # Debug log
+            return self._extract_components(ast_nodes, text)  # Pass only the nodes list
         except Exception as e:
             # Catching a broader exception from mistune if parse itself fails
             raise MarkdownParseError(f"Failed to parse markdown AST: {e}")
 
-    def _extract_components(self, ast_nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _extract_components(self, ast_nodes: List[Dict[str, Any]], original_text: str) -> Dict[str, Any]:
         """
         Extracts components from the mistune AST.
+        
+        Args:
+            ast_nodes: The AST nodes from mistune
+            original_text: The original markdown text for line number calculation
         """
         code_blocks: List[Dict[str, str]] = []
         urls: set[str] = set()
@@ -76,23 +85,36 @@ class MarkdownParser:
 
 
                 # Component-specific extraction
-                if node_type == "block_code":
-                    lang_info = node.get("info")
+                if node_type == "block_code":  # Mistune uses 'block_code' for code blocks
+                    print("Found code block node:", node)  # Debug log
+                    lang_info = node.get("attrs", {}).get("info")  # Language info is in attrs.info
                     language = lang_info.strip() if lang_info else "text"
-                    # Mistune v2/v3 AST for code blocks:
-                    # 'text' child usually holds the code, or 'raw' on the block_code node itself
-                    code_content = ""
-                    if "text" in node: # Sometimes code is in a 'text' field directly
-                        code_content = node["text"]
-                    elif "raw" in node: # More common for mistune v3 for code block content
-                         code_content = node["raw"]
-                    elif node.get("children") and node["children"][0].get("type") == "text":
-                         code_content = node["children"][0].get("text","")
+                    code_content = node.get("raw", "")  # Code content is in raw field
 
 
+                    # Find the code block in the original text to get line numbers
+                    # Look for the opening fence with language
+                    fence_pattern = f"```{language}"
+                    code_block_pos = original_text.find(fence_pattern)
+                    if code_block_pos == -1:  # Try without language
+                        code_block_pos = original_text.find("```")
+                    
+                    # Calculate line numbers
+                    lines_before = original_text[:code_block_pos].count('\n') + 1
+                    lines_after = lines_before + code_content.count('\n') + 2  # +2 for the fence lines
+                    
+                    # Extract context (3 lines before and after)
+                    text_lines = original_text.split('\n')
+                    context_before = '\n'.join(text_lines[max(0, lines_before-4):lines_before-1]) if lines_before > 1 else ''
+                    context_after = '\n'.join(text_lines[lines_after:min(len(text_lines), lines_after+3)])
+                    
                     code_blocks.append({
                         "language": language,
-                        "code": code_content
+                        "code": code_content,
+                        "line_start": lines_before,
+                        "line_end": lines_after - 1,  # -1 because line_end should be the last line of code
+                        "context_before": context_before,
+                        "context_after": context_after
                     })
                     node_repr["language"] = language
                     node_repr["code_content"] = code_content # Store in normalized as well

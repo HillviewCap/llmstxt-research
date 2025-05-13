@@ -16,6 +16,29 @@ class SemgrepRunnerError(Exception):
     pass
 
 class SemgrepRunner:
+    # List of supported languages by semgrep
+    SUPPORTED_LANGUAGES = {
+        "apex", "bash", "c", "c#", "c++", "cairo", "circom", "clojure",
+        "cpp", "csharp", "dart", "docker", "dockerfile", "elixir", "ex",
+        "generic", "go", "golang", "hack", "hcl", "html", "java",
+        "javascript", "js", "json", "jsonnet", "julia", "kotlin", "kt",
+        "lisp", "lua", "move_on_aptos", "move_on_sui", "none", "ocaml",
+        "php", "promql", "proto", "proto3", "protobuf", "py", "python",
+        "python2", "python3", "ql", "r", "regex", "ruby", "rust", "scala",
+        "scheme", "sh", "sol", "solidity", "swift", "terraform", "tf",
+        "ts", "typescript", "vue", "xml", "yaml"
+    }
+
+    # Language aliases mapping
+    LANGUAGE_ALIASES = {
+        "markdown": "generic",
+        "md": "generic",
+        "js": "javascript",
+        "py": "python",
+        "cpp": "c++",
+        "ts": "typescript"
+    }
+
     def __init__(self, rules_path: str, config: Optional[Dict[str, Any]] = None, registry_rulesets: Optional[List[str]] = None):
         self.rules_path = rules_path
         self.config = config or {}
@@ -69,6 +92,16 @@ class SemgrepRunner:
             # If content is provided, language is essential for creating a correctly suffixed temp file
             # and for semgrep to know how to parse it.
             raise SemgrepRunnerError("Language must be provided when scanning content.")
+
+        # Normalize and validate language
+        if language:
+            language = language.lower()
+            # Check for language aliases
+            language = self.LANGUAGE_ALIASES.get(language, language)
+            # Validate language is supported
+            if language not in self.SUPPORTED_LANGUAGES:
+                logger.warning(f"Language '{language}' not supported by semgrep, using 'generic' instead.")
+                language = 'generic'
 
         # Check content size before processing
         if content and len(content) > self.max_content_size:
@@ -125,18 +158,16 @@ class SemgrepRunner:
             cmd = [
                 "semgrep",
                 "--json", # Output in JSON format
-                "--timeout", "30", # Set explicit timeout for semgrep itself
             ]
             
             # For generic language, use a different approach
             if language == 'generic':
-                # Use a more efficient approach for generic content
-                # Instead of a pattern that might cause timeouts, use a simple rule
-                # that's less likely to hang
+                # For generic content, still use local rules but with additional safeguards
                 cmd.extend([
-                    "--config", "r2c-ci",  # Use a lightweight ruleset
+                    "--config", self.rules_path,  # Use local rules
                     "--max-memory", "1024",  # Limit memory usage
                     "--max-target-bytes", str(self.max_content_size),  # Limit file size
+                    "--timeout", "15",  # Shorter timeout for generic content
                     actual_scan_path
                 ])
             else:
@@ -160,7 +191,7 @@ class SemgrepRunner:
                 raise SemgrepRunnerError("Semgrep executable not found. Please ensure it is installed and in PATH.")
 
             # Calculate dynamic timeout based on content size
-            timeout = self._calculate_timeout(content if content else os.path.getsize(actual_scan_path))
+            timeout = self._calculate_timeout(len(content) if content else os.path.getsize(actual_scan_path))
             print(f"Running semgrep with {timeout}s timeout for {len(content) if content else 'file'} bytes")
             
             # Execute Semgrep with dynamic timeout
