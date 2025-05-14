@@ -11,6 +11,9 @@ pyyaml                # Configuration management
 loguru                # Logging
 chardet               # Character encoding detection
 bleach
+requests
+chardet
+psutil
 
 # ---------------------------
 # Security Analysis Tools

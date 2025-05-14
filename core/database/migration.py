@@ -1,7 +1,7 @@
 import sys
-from core.database.connector import DatabaseConnector
-from core.database.schema import create_security_schema
-from core.ml.schema import create_ml_schema
+from connector import DatabaseConnector
+from schema import create_security_schema
+from schema import create_ml_schema
 
 def run_migration():
     try:
