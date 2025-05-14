@@ -10,6 +10,7 @@ from core.sandbox.llm_environment import LLMEnvironment
 from core.monitoring.health_check import HealthChecker
 from core.monitoring.metrics_collector import MetricsCollector
 from core.monitoring.alert_manager import AlertManager
+from core.analysis.markdown.analyzer import MarkdownSecurityAnalyzer
 
 
 def setup_logging(config):
@@ -156,9 +157,9 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["analysis", "reporting", "sandbox", "monitor", "all"],
+        choices=["analysis", "reporting", "sandbox", "monitor", "all", "markdown"],
         default="all",
-        help="Operational mode: analysis, reporting, sandbox, monitor, or all",
+        help="Operational mode: analysis, reporting, sandbox, monitor, markdown, or all",
     )
     parser.add_argument(
         "--config",
@@ -186,6 +187,21 @@ def main():
         type=int,
         default=None,
         help="Monitoring interval in seconds (for monitor mode)",
+    )
+    parser.add_argument(
+        "--input-file",
+        type=str,
+        help="Path to the markdown file to analyze (for modes other than 'markdown')",
+    )
+    parser.add_argument(
+        "--id",
+        type=int,
+        help="ID of the processed markdown content in the database (required for 'markdown' mode)",
+    )
+    parser.add_argument(
+        "--template-file",
+        type=str,
+        help="Path to an optional template markdown file for structural validation",
     )
 
     args = parser.parse_args()
@@ -341,6 +357,50 @@ def main():
             logging.info("Pipeline complete.")
         logging.info(f"Performance metrics: {pipeline.get_performance_metrics()}")
 
+    elif args.mode == "markdown":
+        logging.info("Running markdown analysis mode...")
+
+        # Check if ID is provided
+        if not args.id:
+            print("Error: --id is required for markdown mode.")
+            logging.error("Markdown mode requires a processed content ID (use --id)")
+            sys.exit(1)
+
+        try:
+            # Initialize template content as None
+            markdown_template_content = None
+
+            # If template file is provided, read its content
+            if args.template_file:
+                try:
+                    with open(args.template_file, "r", encoding="utf-8") as f:
+                        markdown_template_content = f.read()
+                    logging.info(f"Loaded template file: {args.template_file}")
+                except FileNotFoundError:
+                    logging.error(f"Template file not found: {args.template_file}")
+                    print(f"Error: Template file not found: {args.template_file}")
+                    sys.exit(1)
+                except Exception as e:
+                    logging.error(f"Error reading template file: {e}")
+                    print(f"Error reading template file: {e}")
+                    sys.exit(1)
+
+            # Instantiate the MarkdownSecurityAnalyzer
+            analyzer = MarkdownSecurityAnalyzer(template=markdown_template_content)
+
+            # Run the analysis with the provided ID
+            results = analyzer.analyze(processed_content_id=args.id)
+
+            # Print the results in a readable format
+            print("\n--- MARKDOWN SECURITY ANALYSIS RESULTS ---")
+            print(json.dumps(results, indent=4))
+
+            logging.info("Markdown analysis complete.")
+
+        except Exception as e:
+            logging.error(f"Error during markdown analysis: {e}")
+            print(f"Error during markdown analysis: {e}")
+            sys.exit(1)
     else:
         parser.print_help()
         sys.exit(1)

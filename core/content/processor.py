@@ -6,19 +6,25 @@ from .retriever import batch_retrieve, ContentRetrievalError
 from .markdown_parser import MarkdownParser, MarkdownParseError
 from .storage import ContentStorage, ContentStorageError
 
+
 class ContentProcessorError(Exception):
     """Custom exception for content processing errors."""
+
     pass
+
 
 class ContentProcessor:
     """
     Integrates retrieval, parsing, and storage of markdown content.
     """
+
     def __init__(self, db_connector: DatabaseConnector):
         self.parser = MarkdownParser()
         self.storage = ContentStorage(db_connector=db_connector)
 
-    def process_single_url(self, url: str, raw_content: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def process_single_url(
+        self, url: str, raw_content: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Retrieves (if not provided), parses, and stores content for a single URL.
         Returns the parsed data if successful, otherwise None.
@@ -32,11 +38,9 @@ class ContentProcessor:
                 print(f"Failed to retrieve content for URL: {url}")
                 return None
 
-            parsed_data = self.parser.parse(raw_content)
+            parsed_data = self.parser.parse(raw_content, source_url=url)
             self.storage.store_parsed_content(
-                source_url=url,
-                raw_markdown_text=raw_content,
-                parsed_data=parsed_data
+                source_url=url, raw_markdown_text=raw_content, parsed_data=parsed_data
             )
             return parsed_data
         except ContentRetrievalError as e:
@@ -52,22 +56,27 @@ class ContentProcessor:
             print(f"Unexpected error processing URL {url}: {e}")
             raise ContentProcessorError(f"Unexpected error for {url}: {e}") from e
 
-
-    def process_batch_urls(self, urls: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
+    def process_batch_urls(
+        self, urls: List[str]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
         """
         Retrieves, parses, and stores content for a batch of URLs.
         Returns a dict mapping URL to parsed_data (or None if failed for that URL).
         Individual failures do not stop the processing of other URLs.
         """
         results: Dict[str, Optional[Dict[str, Any]]] = {}
-        
+
         try:
             url_contents = batch_retrieve(urls)
         except ContentRetrievalError as e:
-            print(f"Batch retrieval failed: {e}. Marking all URLs in this batch as failed for retrieval.")
+            print(
+                f"Batch retrieval failed: {e}. Marking all URLs in this batch as failed for retrieval."
+            )
             for url_item in urls:
-                results[url_item] = None # Mark as retrieval failure
-            return results # Early exit if batch retrieval itself fails catastrophically
+                results[url_item] = None  # Mark as retrieval failure
+            return (
+                results  # Early exit if batch retrieval itself fails catastrophically
+            )
 
         for url, raw_content in url_contents.items():
             if raw_content is None:
@@ -78,10 +87,10 @@ class ContentProcessor:
                 # Re-use single URL processing logic
                 parsed_data = self.process_single_url(url=url, raw_content=raw_content)
                 results[url] = parsed_data
-            except ContentProcessorError as e: # Catch errors from process_single_url
+            except ContentProcessorError as e:  # Catch errors from process_single_url
                 print(f"Failed to process {url} in batch: {e}")
-                results[url] = None # Mark as failed for this specific URL
-            except Exception as e: # Catch any other unexpected errors
+                results[url] = None  # Mark as failed for this specific URL
+            except Exception as e:  # Catch any other unexpected errors
                 print(f"Unexpected critical error processing {url} in batch: {e}")
                 results[url] = None
         return results
@@ -101,40 +110,47 @@ class ContentProcessor:
         Adds 'parsed_content' key to the item with parsed data or None on failure.
         """
         source_url = item.get("source")
-        raw_content = item.get("content") # May or may not be pre-fetched
+        raw_content = item.get("content")  # May or may not be pre-fetched
 
         if not source_url or not isinstance(source_url, str):
             print(f"Invalid or missing source in item: {item.get('id', 'unknown')}")
-            item['parsed_content'] = None
-            item['processing_error'] = "Invalid source"
+            item["parsed_content"] = None
+            item["processing_error"] = "Invalid source"
             return item
 
         # Handle local file paths
         if os.path.exists(source_url):
             try:
-                with open(source_url, 'r', encoding='utf-8') as f:
+                with open(source_url, "r", encoding="utf-8") as f:
                     raw_content = f.read()
             except Exception as e:
                 print(f"Error reading local file {source_url}: {e}")
-                item['parsed_content'] = None
-                item['processing_error'] = f"Failed to read local file: {str(e)}"
+                item["parsed_content"] = None
+                item["processing_error"] = f"Failed to read local file: {str(e)}"
                 return item
 
         print(f"Processing pipeline item, source: {source_url}")
         try:
             # If content is already provided in the item, use it. Otherwise, it will be fetched.
-            parsed_data = self.process_single_url(url=source_url, raw_content=raw_content)
-            item['parsed_content'] = parsed_data
+            # Pass the source_url to process_single_url which will pass it to the parser
+            parsed_data = self.process_single_url(
+                url=source_url, raw_content=raw_content
+            )
+            item["parsed_content"] = parsed_data
             if parsed_data is None:
-                 item['processing_error'] = f"Content processing failed for {source_url} (check logs for details)."
+                item["processing_error"] = (
+                    f"Content processing failed for {source_url} (check logs for details)."
+                )
 
         except ContentProcessorError as e:
             print(f"ContentProcessorError for item {item.get('id', source_url)}: {e}")
-            item['parsed_content'] = None
-            item['processing_error'] = str(e)
-        except Exception as e: # Catch any other unexpected errors
-            print(f"Unexpected critical error processing pipeline item {item.get('id', source_url)}: {e}")
-            item['parsed_content'] = None
-            item['processing_error'] = f"Unexpected critical error: {str(e)}"
-        
+            item["parsed_content"] = None
+            item["processing_error"] = str(e)
+        except Exception as e:  # Catch any other unexpected errors
+            print(
+                f"Unexpected critical error processing pipeline item {item.get('id', source_url)}: {e}"
+            )
+            item["parsed_content"] = None
+            item["processing_error"] = f"Unexpected critical error: {str(e)}"
+
         return item
