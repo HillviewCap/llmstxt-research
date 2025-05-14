@@ -1,0 +1,25 @@
+{
+  "environment": "dev",
+  "timestamp": "2025-05-14T15:18:15.987899",
+  "database": {
+    "path": "researchdb/llms_metadata.db"
+  },
+  "pipeline_workers": 2,
+  "monitoring": {
+    "enabled": true,
+    "health_check_interval": 60,
+    "metrics_collection_interval": 300,
+    "alert_check_interval": 600,
+    "retention_days": 7
+  },
+  "sandbox": {
+    "mode": "mock",
+    "timeout": 30,
+    "max_tokens": 1000
+  },
+  "logging": {
+    "level": "DEBUG",
+    "file": "logs/dev.log"
+  },
+  "venv_path": ".venv"
+}
